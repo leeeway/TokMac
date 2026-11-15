@@ -1,5 +1,6 @@
 import Cocoa
 import WebKit
+import UniformTypeIdentifiers
 
 protocol WebViewControllerDelegate: AnyObject {
     func webViewController(_ controller: WebViewController, didChangeDetailState isOpen: Bool)
@@ -9,6 +10,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     private(set) var webView: TokWebView!
     private var progressIndicator: NSProgressIndicator!
     private var popupWindows: [NSWindow] = []
+    private var pendingBlobDestinationURL: URL?
 
     weak var delegate: WebViewControllerDelegate?
 
@@ -219,7 +221,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         }
     }
 
-    // MARK: - Video Downloading (Direct HTTP & Blob support)
+    // MARK: - Video Downloading (Direct HTTP & Blob support with Folder Chooser)
     func downloadCurrentVideo() {
         webView.evaluateJavaScript("window.tokmacGetVideoDownloadInfo && window.tokmacGetVideoDownloadInfo();") { [weak self] result, error in
             guard let self = self else { return }
@@ -230,30 +232,65 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
                 return
             }
 
-            let author = (dict["author"] as? String)?.replacingOccurrences(of: "/", with: "_") ?? "TikTok"
+            let author = (dict["author"] as? String)?
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: ":", with: "_")
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "TikTok"
             let timestamp = Int(Date().timeIntervalSince1970)
             let filename = "\(author)_\(timestamp).mp4"
             let isBlob = dict["isBlob"] as? Bool ?? false
 
-            if isBlob {
-                self.showNotification(title: "正在提取视频流...", body: filename)
-                let js = "window.tokmacDownloadBlob && window.tokmacDownloadBlob('\(urlString)', '\(filename)');"
-                self.webView.evaluateJavaScript(js, completionHandler: nil)
-            } else if let videoURL = URL(string: urlString) {
-                self.performDirectDownload(from: videoURL, suggestedFilename: filename)
+            self.promptUserForSaveDestination(suggestedFilename: filename) { [weak self] destinationURL in
+                guard let self = self, let destinationURL = destinationURL else { return }
+
+                if isBlob {
+                    self.pendingBlobDestinationURL = destinationURL
+                    self.showNotification(title: "正在提取视频流...", body: destinationURL.lastPathComponent)
+                    let js = "window.tokmacDownloadBlob && window.tokmacDownloadBlob('\(urlString)', '\(destinationURL.lastPathComponent)');"
+                    self.webView.evaluateJavaScript(js, completionHandler: nil)
+                } else if let videoURL = URL(string: urlString) {
+                    self.performDirectDownload(from: videoURL, destinationURL: destinationURL)
+                }
             }
         }
     }
 
-    private func performDirectDownload(from url: URL, suggestedFilename: String) {
-        showNotification(title: "开始下载视频...", body: suggestedFilename)
+    private func promptUserForSaveDestination(suggestedFilename: String, completion: @escaping (URL?) -> Void) {
+        let panel = NSSavePanel()
+        panel.title = "选择保存视频的位置"
+        panel.prompt = "保存"
+        panel.nameFieldStringValue = suggestedFilename
+        panel.canCreateDirectories = true
+        panel.allowedContentTypes = [.mpeg4Movie, .movie]
+
+        if let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
+            panel.directoryURL = downloadsDir
+        }
+
+        if let window = view.window {
+            panel.beginSheetModal(for: window) { response in
+                if response == .OK {
+                    completion(panel.url)
+                } else {
+                    completion(nil)
+                }
+            }
+        } else {
+            let response = panel.runModal()
+            if response == .OK {
+                completion(panel.url)
+            } else {
+                completion(nil)
+            }
+        }
+    }
+
+    private func performDirectDownload(from url: URL, destinationURL: URL) {
+        showNotification(title: "开始下载视频...", body: destinationURL.lastPathComponent)
 
         var request = URLRequest(url: url)
         request.setValue("https://www.tiktok.com/", forHTTPHeaderField: "Referer")
         request.setValue(webView.customUserAgent, forHTTPHeaderField: "User-Agent")
-
-        let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
-        let destinationURL = downloadsDir.appendingPathComponent(suggestedFilename)
 
         let task = URLSession.shared.downloadTask(with: request) { [weak self] tempURL, response, error in
             guard let self = self else { return }
@@ -285,7 +322,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         task.resume()
     }
 
-    private func saveBase64VideoToFile(base64: String, filename: String) {
+    private func saveBase64VideoToFile(base64: String, destinationURL: URL) {
         var cleanBase64 = base64
         if let commaIndex = cleanBase64.firstIndex(of: ",") {
             cleanBase64 = String(cleanBase64[cleanBase64.index(after: commaIndex)...])
@@ -296,10 +333,8 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
             return
         }
 
-        let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
-        let destinationURL = downloadsDir.appendingPathComponent(filename)
-
         do {
+            try? FileManager.default.removeItem(at: destinationURL)
             try data.write(to: destinationURL)
             DispatchQueue.main.async {
                 NSSound(named: "Glass")?.play()
@@ -345,9 +380,10 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
                 delegate?.webViewController(self, didChangeDetailState: isOpen)
 
             case "saveBase64Video":
-                if let base64 = body["base64"] as? String,
-                   let filename = body["filename"] as? String {
-                    saveBase64VideoToFile(base64: base64, filename: filename)
+                if let base64 = body["base64"] as? String {
+                    let destination = self.pendingBlobDestinationURL ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!.appendingPathComponent("TikTok_video.mp4")
+                    self.pendingBlobDestinationURL = nil
+                    saveBase64VideoToFile(base64: base64, destinationURL: destination)
                 }
 
             default:
@@ -389,14 +425,9 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
 
     // MARK: - WKDownloadDelegate
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
-        let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
-        var destination = downloadsDir.appendingPathComponent(suggestedFilename)
-        if FileManager.default.fileExists(atPath: destination.path) {
-            let name = (suggestedFilename as NSString).deletingPathExtension
-            let ext = (suggestedFilename as NSString).pathExtension
-            destination = downloadsDir.appendingPathComponent("\(name)_\(Int(Date().timeIntervalSince1970)).\(ext)")
+        promptUserForSaveDestination(suggestedFilename: suggestedFilename) { selectedURL in
+            completionHandler(selectedURL)
         }
-        completionHandler(destination)
     }
 
     func downloadDidFinish(_ download: WKDownload) {
