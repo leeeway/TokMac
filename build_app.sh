@@ -24,5 +24,10 @@ chmod +x "${APP_DIR}/Contents/MacOS/TokMac"
 echo "🔏 Ad-hoc code signing..."
 codesign --force --deep --sign - "${APP_DIR}" 2>/dev/null || true
 
-echo "✅ TokMac.app successfully built at: ${APP_DIR}"
-echo "🚀 To run: open ${APP_DIR}"
+echo "📲 Installing to /Applications..."
+rm -rf "/Applications/${APP_NAME}"
+cp -R "${APP_DIR}" "/Applications/${APP_NAME}"
+killall Dock 2>/dev/null || true
+
+echo "✅ TokMac.app successfully installed to /Applications!"
+echo "🚀 Available now in Launchpad (启动台) & Spotlight!"
