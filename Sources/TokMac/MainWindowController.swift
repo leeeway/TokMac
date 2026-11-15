@@ -1,18 +1,21 @@
 import Cocoa
 
-final class MainWindowController: NSWindowController, NSToolbarDelegate {
+final class MainWindowController: NSWindowController, NSToolbarDelegate, WebViewControllerDelegate {
     private let webViewController = WebViewController()
     private(set) var isAlwaysOnTop: Bool = false
 
     private let toolbarID = NSToolbar.Identifier("TokMacMainToolbar")
     private let pinItemID = NSToolbarItem.Identifier("TokMacPinItem")
     private let modeItemID = NSToolbarItem.Identifier("TokMacModeItem")
+    private let commentModeItemID = NSToolbarItem.Identifier("TokMacCommentModeItem")
+    private let downloadItemID = NSToolbarItem.Identifier("TokMacDownloadItem")
     private let cleanItemID = NSToolbarItem.Identifier("TokMacCleanItem")
     private let autoNextItemID = NSToolbarItem.Identifier("TokMacAutoNextItem")
     private let reloadItemID = NSToolbarItem.Identifier("TokMacReloadItem")
 
     convenience init() {
-        let initialRect = NSRect(x: 100, y: 100, width: 420, height: 780)
+        // Optimized 490x820 size ensures 9:16 video + action buttons (Like, Comment, Share) are 100% visible
+        let initialRect = NSRect(x: 100, y: 100, width: 490, height: 820)
         let window = NSWindow(
             contentRect: initialRect,
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -25,14 +28,14 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.backgroundColor = .black
-        window.minSize = NSSize(width: 320, height: 500)
+        window.minSize = NSSize(width: 360, height: 520)
 
-        // Center on screen
         window.center()
         window.setFrameAutosaveName("TokMainWindow")
 
         self.init(window: window)
 
+        webViewController.delegate = self
         contentViewController = webViewController
         setupToolbar()
     }
@@ -53,6 +56,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             .flexibleSpace,
             pinItemID,
             modeItemID,
+            commentModeItemID,
+            downloadItemID,
             cleanItemID,
             autoNextItemID,
             reloadItemID
@@ -64,6 +69,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             .flexibleSpace,
             pinItemID,
             modeItemID,
+            commentModeItemID,
+            downloadItemID,
             cleanItemID,
             autoNextItemID,
             reloadItemID
@@ -84,11 +91,24 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             item.target = self
 
         case modeItemID:
-            item.label = "布局"
-            item.toolTip = "切换竖屏/宽屏模式 (Cmd+1 / Cmd+2)"
-            let img = NSImage(systemSymbolName: webViewController.isCompactMode ? "iphone" : "macbook", accessibilityDescription: "Layout")
-            item.image = img
-            item.action = #selector(toggleLayoutMode)
+            item.label = "竖屏"
+            item.toolTip = "手机竖屏模式 (Cmd+1)"
+            item.image = NSImage(systemSymbolName: "iphone", accessibilityDescription: "Phone")
+            item.action = #selector(setPhoneMode)
+            item.target = self
+
+        case commentModeItemID:
+            item.label = "评论"
+            item.toolTip = "视频+评论并列模式 (Cmd+3 或 C)"
+            item.image = NSImage(systemSymbolName: "bubble.left.and.bubble.right", accessibilityDescription: "Comments")
+            item.action = #selector(setCommentMode)
+            item.target = self
+
+        case downloadItemID:
+            item.label = "下载"
+            item.toolTip = "下载当前播放的视频 (Cmd+S)"
+            item.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: "Download")
+            item.action = #selector(downloadCurrentVideo)
             item.target = self
 
         case cleanItemID:
@@ -121,13 +141,32 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         return item
     }
 
+    // MARK: - WebViewControllerDelegate
+    func webViewController(_ controller: WebViewController, didChangeCommentState isOpen: Bool) {
+        guard let window = window else { return }
+        if isOpen && window.frame.width < 650 {
+            // Auto expand window to show comments side-by-side!
+            var frame = window.frame
+            let targetWidth: CGFloat = 880
+            frame.origin.x = max(20, frame.origin.x - (targetWidth - frame.width) / 2)
+            frame.size.width = targetWidth
+            window.setFrame(frame, display: true, animate: true)
+        } else if !isOpen && window.frame.width >= 800 && webViewController.isCompactMode {
+            // Restore to compact phone mode
+            var frame = window.frame
+            let targetWidth: CGFloat = 490
+            frame.origin.x += (frame.width - targetWidth) / 2
+            frame.size.width = targetWidth
+            window.setFrame(frame, display: true, animate: true)
+        }
+    }
+
     // MARK: - Actions
     @objc func toggleAlwaysOnTop() {
         guard let window = window else { return }
         isAlwaysOnTop.toggle()
         window.level = isAlwaysOnTop ? .floating : .normal
 
-        // Refresh toolbar item icon
         if let toolbar = window.toolbar {
             for item in toolbar.items where item.itemIdentifier == pinItemID {
                 item.image = NSImage(systemSymbolName: isAlwaysOnTop ? "pin.fill" : "pin", accessibilityDescription: "Pin")
@@ -135,25 +174,29 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         }
     }
 
-    @objc func toggleLayoutMode() {
-        if webViewController.isCompactMode {
-            setDesktopMode()
-        } else {
-            setPhoneMode()
-        }
-    }
-
     @objc func setPhoneMode() {
         guard let window = window else { return }
         webViewController.isCompactMode = true
         var frame = window.frame
-        let targetWidth: CGFloat = 420
-        let targetHeight: CGFloat = 780
+        let targetWidth: CGFloat = 490
+        let targetHeight: CGFloat = 820
+        frame.origin.y += (frame.size.height - targetHeight)
+        frame.size = NSSize(width: targetWidth, height: targetHeight)
+        window.setFrame(frame, display: true, animate: true)
+    }
+
+    @objc func setCommentMode() {
+        guard let window = window else { return }
+        webViewController.isCompactMode = false
+        var frame = window.frame
+        let targetWidth: CGFloat = 880
+        let targetHeight: CGFloat = 820
         frame.origin.y += (frame.size.height - targetHeight)
         frame.size = NSSize(width: targetWidth, height: targetHeight)
         window.setFrame(frame, display: true, animate: true)
 
-        updateModeToolbarIcon()
+        // Open comments if not open
+        webViewController.toggleComments()
     }
 
     @objc func setDesktopMode() {
@@ -161,32 +204,14 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         webViewController.isCompactMode = false
         var frame = window.frame
         let targetWidth: CGFloat = 1080
-        let targetHeight: CGFloat = 750
+        let targetHeight: CGFloat = 780
         frame.origin.y += (frame.size.height - targetHeight)
         frame.size = NSSize(width: targetWidth, height: targetHeight)
         window.setFrame(frame, display: true, animate: true)
-
-        updateModeToolbarIcon()
     }
 
-    @objc func setMiniMode() {
-        guard let window = window else { return }
-        webViewController.isCompactMode = true
-        var frame = window.frame
-        let targetWidth: CGFloat = 340
-        let targetHeight: CGFloat = 600
-        frame.origin.y += (frame.size.height - targetHeight)
-        frame.size = NSSize(width: targetWidth, height: targetHeight)
-        window.setFrame(frame, display: true, animate: true)
-
-        updateModeToolbarIcon()
-    }
-
-    private func updateModeToolbarIcon() {
-        guard let window = window, let toolbar = window.toolbar else { return }
-        for item in toolbar.items where item.itemIdentifier == modeItemID {
-            item.image = NSImage(systemSymbolName: webViewController.isCompactMode ? "iphone" : "macbook", accessibilityDescription: "Layout")
-        }
+    @objc func downloadCurrentVideo() {
+        webViewController.downloadCurrentVideo()
     }
 
     @objc func toggleCleanMode() {
@@ -231,5 +256,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
     @objc func toggleMute() {
         webViewController.toggleMute()
+    }
+
+    @objc func toggleComments() {
+        webViewController.toggleComments()
     }
 }

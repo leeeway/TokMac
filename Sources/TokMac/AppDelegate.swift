@@ -32,7 +32,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
 
-        // 2. View Menu
+        // 2. File / Actions Menu
+        let fileMenuItem = NSMenuItem()
+        let fileMenu = NSMenu(title: "文件")
+        let downloadItem = NSMenuItem(title: "下载当前视频到电脑", action: #selector(downloadCurrentVideo), keyEquivalent: "s")
+        downloadItem.target = self
+        fileMenu.addItem(downloadItem)
+        fileMenuItem.submenu = fileMenu
+        mainMenu.addItem(fileMenuItem)
+
+        // 3. View Menu
         let viewMenuItem = NSMenuItem()
         let viewMenu = NSMenu(title: "视图")
         
@@ -41,17 +50,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenu.addItem(pinItem)
         viewMenu.addItem(NSMenuItem.separator())
 
-        let phoneItem = NSMenuItem(title: "手机竖屏模式 (420×780)", action: #selector(setPhoneMode), keyEquivalent: "1")
+        let phoneItem = NSMenuItem(title: "手机竖屏模式 (490×820)", action: #selector(setPhoneMode), keyEquivalent: "1")
         phoneItem.target = self
         viewMenu.addItem(phoneItem)
 
-        let desktopItem = NSMenuItem(title: "宽屏桌面模式 (1080×750)", action: #selector(setDesktopMode), keyEquivalent: "2")
+        let commentItem = NSMenuItem(title: "视频 + 评论并列模式 (880×820)", action: #selector(setCommentMode), keyEquivalent: "3")
+        commentItem.target = self
+        viewMenu.addItem(commentItem)
+
+        let desktopItem = NSMenuItem(title: "宽屏桌面模式 (1080×780)", action: #selector(setDesktopMode), keyEquivalent: "2")
         desktopItem.target = self
         viewMenu.addItem(desktopItem)
-
-        let miniItem = NSMenuItem(title: "迷你挂屏模式 (340×600)", action: #selector(setMiniMode), keyEquivalent: "3")
-        miniItem.target = self
-        viewMenu.addItem(miniItem)
 
         viewMenu.addItem(NSMenuItem.separator())
         let cleanItem = NSMenuItem(title: "纯净模式 (隐藏干扰横幅)", action: #selector(toggleClean), keyEquivalent: "C")
@@ -80,7 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenuItem.submenu = viewMenu
         mainMenu.addItem(viewMenuItem)
 
-        // 3. Playback Menu
+        // 4. Playback Menu
         let playMenuItem = NSMenuItem()
         let playMenu = NSMenu(title: "播放控制")
 
@@ -101,10 +110,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         muteItem.target = self
         playMenu.addItem(muteItem)
 
+        let toggleCommentsItem = NSMenuItem(title: "展开 / 关闭评论区 (C)", action: #selector(toggleComments), keyEquivalent: "c")
+        toggleCommentsItem.target = self
+        playMenu.addItem(toggleCommentsItem)
+
         playMenuItem.submenu = playMenu
         mainMenu.addItem(playMenuItem)
 
-        // 4. Window Menu
+        // 5. Window Menu
         let windowMenuItem = NSMenuItem()
         let windowMenu = NSMenu(title: "窗口")
         windowMenu.addItem(withTitle: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
@@ -115,6 +128,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = mainMenu
     }
 
+    @objc private func downloadCurrentVideo() {
+        mainWindowController?.downloadCurrentVideo()
+    }
+
     @objc private func togglePin() {
         mainWindowController?.toggleAlwaysOnTop()
     }
@@ -123,12 +140,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainWindowController?.setPhoneMode()
     }
 
-    @objc private func setDesktopMode() {
-        mainWindowController?.setDesktopMode()
+    @objc private func setCommentMode() {
+        mainWindowController?.setCommentMode()
     }
 
-    @objc private func setMiniMode() {
-        mainWindowController?.setMiniMode()
+    @objc private func setDesktopMode() {
+        mainWindowController?.setDesktopMode()
     }
 
     @objc private func toggleClean() {
@@ -165,5 +182,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleMute() {
         mainWindowController?.toggleMute()
+    }
+
+    @objc private func toggleComments() {
+        mainWindowController?.toggleComments()
     }
 }

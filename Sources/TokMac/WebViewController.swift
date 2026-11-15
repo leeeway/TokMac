@@ -1,10 +1,17 @@
 import Cocoa
 import WebKit
+import UserNotifications
 
-final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDelegate {
+protocol WebViewControllerDelegate: AnyObject {
+    func webViewController(_ controller: WebViewController, didChangeCommentState isOpen: Bool)
+}
+
+final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKDownloadDelegate {
     private(set) var webView: WKWebView!
     private var progressIndicator: NSProgressIndicator!
     private var popupWindows: [NSWindow] = []
+
+    weak var delegate: WebViewControllerDelegate?
 
     var isCompactMode: Bool = true {
         didSet {
@@ -25,7 +32,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     }
 
     override func loadView() {
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 780))
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 490, height: 820))
         view.wantsLayer = true
         view.layer?.backgroundColor = NSColor.black.cgColor
         self.view = view
@@ -48,8 +55,9 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         config.preferences.isElementFullscreenEnabled = true
 
         let userContent = config.userContentController
+        userContent.add(self, name: "tokmac")
 
-        // Inject script to handle shortcuts & clean layout
+        // Inject script to handle shortcuts, comment detection & clean layout
         let navScript = WKUserScript(
             source: InjectedScripts.keyboardAndNavigationJS,
             injectionTime: .atDocumentEnd,
@@ -74,10 +82,13 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         webView.navigationDelegate = self
         webView.uiDelegate = self
 
+        if #available(macOS 13.3, *) {
+            webView.isInspectable = true
+        }
+
         // Standard modern Safari Desktop User-Agent for seamless login & video streaming
         webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
 
-        // Dark background for video player
         webView.setValue(false, forKey: "drawsBackground")
         view.addSubview(webView)
     }
@@ -166,6 +177,10 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         webView.evaluateJavaScript("window.tokmacToggleMute && window.tokmacToggleMute();", completionHandler: nil)
     }
 
+    func toggleComments() {
+        webView.evaluateJavaScript("window.tokmacToggleComments && window.tokmacToggleComments();", completionHandler: nil)
+    }
+
     func reloadPage() {
         webView.reload()
     }
@@ -182,16 +197,158 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         }
     }
 
-    // MARK: - WKNavigationDelegate
+    // MARK: - Video Downloading
+    func downloadCurrentVideo() {
+        webView.evaluateJavaScript("window.tokmacGetVideoDownloadInfo && window.tokmacGetVideoDownloadInfo();") { [weak self] result, error in
+            guard let self = self else { return }
+            guard let dict = result as? [String: Any],
+                  let urlString = dict["url"] as? String,
+                  let videoURL = URL(string: urlString) else {
+                self.showNotification(title: "未检测到可下载视频", body: "请先播放一个视频后再点击下载")
+                NSSound.beep()
+                return
+            }
+
+            let author = (dict["author"] as? String)?.replacingOccurrences(of: "/", with: "_") ?? "TikTok"
+            let timestamp = Int(Date().timeIntervalSince1970)
+            let filename = "\(author)_\(timestamp).mp4"
+
+            self.performDirectDownload(from: videoURL, suggestedFilename: filename)
+        }
+    }
+
+    private func performDirectDownload(from url: URL, suggestedFilename: String) {
+        showNotification(title: "开始下载视频...", body: suggestedFilename)
+
+        var request = URLRequest(url: url)
+        request.setValue("https://www.tiktok.com/", forHTTPHeaderField: "Referer")
+        request.setValue(webView.customUserAgent, forHTTPHeaderField: "User-Agent")
+
+        let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+        let destinationURL = downloadsDir.appendingPathComponent(suggestedFilename)
+
+        let task = URLSession.shared.downloadTask(with: request) { [weak self] tempURL, response, error in
+            guard let self = self else { return }
+
+            if let error = error {
+                DispatchQueue.main.async {
+                    self.showNotification(title: "下载失败", body: error.localizedDescription)
+                    NSSound.beep()
+                }
+                return
+            }
+
+            guard let tempURL = tempURL else { return }
+
+            do {
+                try? FileManager.default.removeItem(at: destinationURL)
+                try FileManager.default.moveItem(at: tempURL, to: destinationURL)
+
+                DispatchQueue.main.async {
+                    NSSound(named: "Glass")?.play()
+                    self.showDownloadCompletedAlert(fileURL: destinationURL)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.showNotification(title: "文件保存失败", body: error.localizedDescription)
+                }
+            }
+        }
+        task.resume()
+    }
+
+    private func showDownloadCompletedAlert(fileURL: URL) {
+        let alert = NSAlert()
+        alert.messageText = "视频下载完成！"
+        alert.informativeText = "文件已保存至：\n\(fileURL.path)"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "在 Finder 中显示")
+        alert.addButton(withTitle: "好")
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            NSWorkspace.shared.activateFileViewerSelecting([fileURL])
+        }
+    }
+
+    private func showNotification(title: String, body: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = body
+        alert.alertStyle = .informational
+        alert.runModal()
+    }
+
+    // MARK: - WKScriptMessageHandler
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "tokmac", let body = message.body as? [String: Any] else { return }
+
+        if let type = body["type"] as? String {
+            switch type {
+            case "commentPanelStateChanged":
+                let isOpen = body["isOpen"] as? Bool ?? false
+                delegate?.webViewController(self, didChangeCommentState: isOpen)
+            default:
+                break
+            }
+        }
+    }
+
+    // MARK: - WKNavigationDelegate (Downloads & Navigation)
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         updateCompactModeState()
         updateCleanModeState()
         updateAutoNextState()
     }
 
-    // MARK: - WKUIDelegate (OAuth Popup Support for Google/Apple/TikTok Login)
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, preferences: WKWebpagePreferences, decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
+        if navigationAction.shouldPerformDownload {
+            decisionHandler(.download, preferences)
+            return
+        }
+        decisionHandler(.allow, preferences)
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if navigationResponse.canShowMIMEType {
+            decisionHandler(.allow)
+        } else {
+            decisionHandler(.download)
+        }
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    // MARK: - WKDownloadDelegate
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
+        let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+        var destination = downloadsDir.appendingPathComponent(suggestedFilename)
+        if FileManager.default.fileExists(atPath: destination.path) {
+            let name = (suggestedFilename as NSString).deletingPathExtension
+            let ext = (suggestedFilename as NSString).pathExtension
+            destination = downloadsDir.appendingPathComponent("\(name)_\(Int(Date().timeIntervalSince1970)).\(ext)")
+        }
+        completionHandler(destination)
+    }
+
+    func downloadDidFinish(_ download: WKDownload) {
+        NSSound(named: "Glass")?.play()
+        let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+        showDownloadCompletedAlert(fileURL: downloadsDir)
+    }
+
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        showNotification(title: "下载遇到问题", body: error.localizedDescription)
+    }
+
+    // MARK: - WKUIDelegate (OAuth Popup Support)
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        // Create popup window for OAuth / Login dialogs
         let popupRect = NSRect(
             x: (windowFeatures.x?.doubleValue).map { CGFloat($0) } ?? 200,
             y: (windowFeatures.y?.doubleValue).map { CGFloat($0) } ?? 200,
