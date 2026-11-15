@@ -6,11 +6,18 @@ protocol WebViewControllerDelegate: AnyObject {
     func webViewController(_ controller: WebViewController, didChangeDetailState isOpen: Bool)
 }
 
-final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKDownloadDelegate {
+final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKDownloadDelegate, URLSessionDownloadDelegate {
     private(set) var webView: TokWebView!
     private var progressIndicator: NSProgressIndicator!
     private var popupWindows: [NSWindow] = []
     private var pendingBlobDestinationURL: URL?
+    private var downloadHUD: DownloadHUDView?
+    private var downloadTaskDestinations: [URLSessionDownloadTask: URL] = [:]
+
+    private lazy var customDownloadSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        return URLSession(configuration: config, delegate: self, delegateQueue: nil)
+    }()
 
     weak var delegate: WebViewControllerDelegate?
 
@@ -221,13 +228,31 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         }
     }
 
-    // MARK: - Video Downloading (Direct HTTP & Blob support with Folder Chooser)
+    // MARK: - Video Downloading (Direct HTTP & Blob support with HUD & Progress)
+    private func showDownloadHUD() -> DownloadHUDView {
+        if let existing = downloadHUD, existing.superview != nil {
+            return existing
+        }
+        let hud = DownloadHUDView()
+        hud.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(hud)
+        NSLayoutConstraint.activate([
+            hud.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            hud.topAnchor.constraint(equalTo: view.topAnchor, constant: 18),
+            hud.widthAnchor.constraint(equalToConstant: 380),
+            hud.heightAnchor.constraint(equalToConstant: 68)
+        ])
+        downloadHUD = hud
+        return hud
+    }
+
     func downloadCurrentVideo() {
         webView.evaluateJavaScript("window.tokmacGetVideoDownloadInfo && window.tokmacGetVideoDownloadInfo();") { [weak self] result, error in
             guard let self = self else { return }
             guard let dict = result as? [String: Any],
                   let urlString = dict["url"] as? String else {
-                self.showNotification(title: "未找到视频源", body: "请等待视频加载完成或播放后再尝试下载")
+                let hud = self.showDownloadHUD()
+                hud.showError(message: "请等待视频加载完成或播放后再尝试下载")
                 NSSound.beep()
                 return
             }
@@ -245,7 +270,8 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
 
                 if isBlob {
                     self.pendingBlobDestinationURL = destinationURL
-                    self.showNotification(title: "正在提取视频流...", body: destinationURL.lastPathComponent)
+                    let hud = self.showDownloadHUD()
+                    hud.setIndeterminate(title: "正在提取视频流...", subtitle: destinationURL.lastPathComponent)
                     let js = "window.tokmacDownloadBlob && window.tokmacDownloadBlob('\(urlString)', '\(destinationURL.lastPathComponent)');"
                     self.webView.evaluateJavaScript(js, completionHandler: nil)
                 } else if let videoURL = URL(string: urlString) {
@@ -286,40 +312,50 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     }
 
     private func performDirectDownload(from url: URL, destinationURL: URL) {
-        showNotification(title: "开始下载视频...", body: destinationURL.lastPathComponent)
+        let hud = showDownloadHUD()
+        hud.startDownload(filename: destinationURL.lastPathComponent)
 
         var request = URLRequest(url: url)
         request.setValue("https://www.tiktok.com/", forHTTPHeaderField: "Referer")
         request.setValue(webView.customUserAgent, forHTTPHeaderField: "User-Agent")
 
-        let task = URLSession.shared.downloadTask(with: request) { [weak self] tempURL, response, error in
-            guard let self = self else { return }
+        let task = customDownloadSession.downloadTask(with: request)
+        downloadTaskDestinations[task] = destinationURL
+        task.resume()
+    }
 
-            if let error = error {
-                DispatchQueue.main.async {
-                    self.showNotification(title: "下载失败", body: error.localizedDescription)
-                    NSSound.beep()
-                }
-                return
+    // MARK: - URLSessionDownloadDelegate (Real-time Progress)
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        let fraction = totalBytesExpectedToWrite > 0 ? Double(totalBytesWritten) / Double(totalBytesExpectedToWrite) : 0.0
+        DispatchQueue.main.async {
+            self.downloadHUD?.updateProgress(fraction: fraction, writtenBytes: totalBytesWritten, totalBytes: totalBytesExpectedToWrite)
+        }
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        guard let destinationURL = downloadTaskDestinations[downloadTask] else { return }
+        downloadTaskDestinations.removeValue(forKey: downloadTask)
+
+        do {
+            try? FileManager.default.removeItem(at: destinationURL)
+            try FileManager.default.moveItem(at: location, to: destinationURL)
+            DispatchQueue.main.async {
+                NSSound(named: "Glass")?.play()
+                self.downloadHUD?.finishDownload(fileURL: destinationURL)
             }
-
-            guard let tempURL = tempURL else { return }
-
-            do {
-                try? FileManager.default.removeItem(at: destinationURL)
-                try FileManager.default.moveItem(at: tempURL, to: destinationURL)
-
-                DispatchQueue.main.async {
-                    NSSound(named: "Glass")?.play()
-                    self.showDownloadCompletedAlert(fileURL: destinationURL)
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.showNotification(title: "文件保存失败", body: error.localizedDescription)
-                }
+        } catch {
+            DispatchQueue.main.async {
+                self.downloadHUD?.showError(message: error.localizedDescription)
             }
         }
-        task.resume()
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error = error {
+            DispatchQueue.main.async {
+                self.downloadHUD?.showError(message: error.localizedDescription)
+            }
+        }
     }
 
     private func saveBase64VideoToFile(base64: String, destinationURL: URL) {
@@ -329,7 +365,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         }
 
         guard let data = Data(base64Encoded: cleanBase64) else {
-            showNotification(title: "视频数据解析失败", body: "未能成功解码视频二进制数据")
+            downloadHUD?.showError(message: "未能解码视频二进制数据")
             return
         }
 
@@ -338,35 +374,18 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
             try data.write(to: destinationURL)
             DispatchQueue.main.async {
                 NSSound(named: "Glass")?.play()
-                self.showDownloadCompletedAlert(fileURL: destinationURL)
+                self.downloadHUD?.finishDownload(fileURL: destinationURL)
             }
         } catch {
             DispatchQueue.main.async {
-                self.showNotification(title: "文件写入失败", body: error.localizedDescription)
+                self.downloadHUD?.showError(message: error.localizedDescription)
             }
-        }
-    }
-
-    private func showDownloadCompletedAlert(fileURL: URL) {
-        let alert = NSAlert()
-        alert.messageText = "🎉 视频下载完成！"
-        alert.informativeText = "文件已保存至：\n\(fileURL.path)"
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "在 Finder 中显示")
-        alert.addButton(withTitle: "好")
-
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            NSWorkspace.shared.activateFileViewerSelecting([fileURL])
         }
     }
 
     private func showNotification(title: String, body: String) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = body
-        alert.alertStyle = .informational
-        alert.runModal()
+        let hud = showDownloadHUD()
+        hud.showToast(title: title, subtitle: body)
     }
 
     // MARK: - WKScriptMessageHandler
@@ -433,11 +452,11 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     func downloadDidFinish(_ download: WKDownload) {
         NSSound(named: "Glass")?.play()
         let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
-        showDownloadCompletedAlert(fileURL: downloadsDir)
+        downloadHUD?.finishDownload(fileURL: downloadsDir)
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
-        showNotification(title: "下载遇到问题", body: error.localizedDescription)
+        downloadHUD?.showError(message: error.localizedDescription)
     }
 
     // MARK: - WKUIDelegate (OAuth Popup Support)
