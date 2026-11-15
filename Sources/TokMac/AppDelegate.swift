@@ -50,28 +50,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenu.addItem(pinItem)
         viewMenu.addItem(NSMenuItem.separator())
 
+        let forYouItem = NSMenuItem(title: "首页推荐 (For You)", action: #selector(loadForYou), keyEquivalent: "")
+        forYouItem.target = self
+        viewMenu.addItem(forYouItem)
+
+        let followingItem = NSMenuItem(title: "已关注 (Following)", action: #selector(loadFollowing), keyEquivalent: "")
+        followingItem.target = self
+        viewMenu.addItem(followingItem)
+
+        let exploreItem = NSMenuItem(title: "探索 (Explore)", action: #selector(loadExplore), keyEquivalent: "")
+        exploreItem.target = self
+        viewMenu.addItem(exploreItem)
+
+        viewMenu.addItem(NSMenuItem.separator())
+
         let phoneItem = NSMenuItem(title: "手机竖屏模式 (490×820)", action: #selector(setPhoneMode), keyEquivalent: "1")
         phoneItem.target = self
         viewMenu.addItem(phoneItem)
 
-        let commentItem = NSMenuItem(title: "视频 + 评论并列模式 (880×820)", action: #selector(setCommentMode), keyEquivalent: "3")
-        commentItem.target = self
-        viewMenu.addItem(commentItem)
-
         let desktopItem = NSMenuItem(title: "宽屏桌面模式 (1080×780)", action: #selector(setDesktopMode), keyEquivalent: "2")
         desktopItem.target = self
         viewMenu.addItem(desktopItem)
-
-        viewMenu.addItem(NSMenuItem.separator())
-        let cleanItem = NSMenuItem(title: "纯净模式 (隐藏干扰横幅)", action: #selector(toggleClean), keyEquivalent: "C")
-        cleanItem.keyEquivalentModifierMask = [.command, .shift]
-        cleanItem.target = self
-        viewMenu.addItem(cleanItem)
-
-        let autoNextItem = NSMenuItem(title: "自动连播下一个", action: #selector(toggleAutoNext), keyEquivalent: "A")
-        autoNextItem.keyEquivalentModifierMask = [.command, .shift]
-        autoNextItem.target = self
-        viewMenu.addItem(autoNextItem)
 
         viewMenu.addItem(NSMenuItem.separator())
         let reloadItem = NSMenuItem(title: "重新加载", action: #selector(reloadPage), keyEquivalent: "r")
@@ -128,6 +127,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = mainMenu
     }
 
+    @objc private func loadForYou() {
+        mainWindowController?.loadForYou()
+    }
+
+    @objc private func loadFollowing() {
+        mainWindowController?.loadFollowing()
+    }
+
+    @objc private func loadExplore() {
+        mainWindowController?.loadExplore()
+    }
+
     @objc private func downloadCurrentVideo() {
         mainWindowController?.downloadCurrentVideo()
     }
@@ -140,20 +151,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainWindowController?.setPhoneMode()
     }
 
-    @objc private func setCommentMode() {
-        mainWindowController?.setCommentMode()
-    }
-
     @objc private func setDesktopMode() {
         mainWindowController?.setDesktopMode()
-    }
-
-    @objc private func toggleClean() {
-        mainWindowController?.toggleCleanMode()
-    }
-
-    @objc private func toggleAutoNext() {
-        mainWindowController?.toggleAutoNext()
     }
 
     @objc private func reloadPage() {

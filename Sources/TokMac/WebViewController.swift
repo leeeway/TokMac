@@ -2,7 +2,7 @@ import Cocoa
 import WebKit
 
 protocol WebViewControllerDelegate: AnyObject {
-    func webViewController(_ controller: WebViewController, didChangeCommentState isOpen: Bool)
+    func webViewController(_ controller: WebViewController, didChangeDetailState isOpen: Bool)
 }
 
 final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKDownloadDelegate {
@@ -136,6 +136,24 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         }
     }
 
+    func loadForYou() {
+        if let url = URL(string: "https://www.tiktok.com/foryou") {
+            webView.load(URLRequest(url: url))
+        }
+    }
+
+    func loadFollowing() {
+        if let url = URL(string: "https://www.tiktok.com/following") {
+            webView.load(URLRequest(url: url))
+        }
+    }
+
+    func loadExplore() {
+        if let url = URL(string: "https://www.tiktok.com/explore") {
+            webView.load(URLRequest(url: url))
+        }
+    }
+
     func updateCompactModeState() {
         let js = "document.body && document.body.classList.toggle('tokmac-compact', \(isCompactMode));"
         webView.evaluateJavaScript(js, completionHandler: nil)
@@ -207,7 +225,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
             guard let self = self else { return }
             guard let dict = result as? [String: Any],
                   let urlString = dict["url"] as? String else {
-                self.showNotification(title: "未找到视频源", body: "请等待视频加载完成或开始播放后再尝试下载")
+                self.showNotification(title: "未找到视频源", body: "请等待视频加载完成或播放后再尝试下载")
                 NSSound.beep()
                 return
             }
@@ -322,9 +340,9 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
 
         if let type = body["type"] as? String {
             switch type {
-            case "commentPanelStateChanged":
+            case "detailViewChanged":
                 let isOpen = body["isOpen"] as? Bool ?? false
-                delegate?.webViewController(self, didChangeCommentState: isOpen)
+                delegate?.webViewController(self, didChangeDetailState: isOpen)
 
             case "saveBase64Video":
                 if let base64 = body["base64"] as? String,

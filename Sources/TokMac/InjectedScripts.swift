@@ -2,7 +2,7 @@ import Foundation
 
 enum InjectedScripts {
     static let cleanModeCSS = """
-    /* TokMac Clean & Hover-Sidebar Mode */
+    /* TokMac Clean & Streamlined CSS */
 
     /* Hide top nav banner, desktop download promos, and mobile app download banners */
     div[class*="DivBannerContainer"],
@@ -18,40 +18,20 @@ enum InjectedScripts {
         display: none !important;
     }
 
-    /* Left Sidebar: Hover Drawer Behavior */
-    /* By default in compact mode, tuck sidebar off-screen to the left with smooth transition */
+    /* Completely hide clunky sidebar in compact mode - no black bar! */
     body.tokmac-compact aside,
     body.tokmac-compact [class*="DivSideNavContainer"],
     body.tokmac-compact [class*="DivSideNavWrapper"],
     body.tokmac-compact [class*="DivSidebarContainer"] {
-        position: fixed !important;
-        top: 0 !important;
-        bottom: 0 !important;
-        left: -270px !important;
-        width: 260px !important;
-        max-width: 260px !important;
-        z-index: 999999 !important;
-        background: rgba(18, 18, 24, 0.95) !important;
-        backdrop-filter: blur(25px) !important;
-        -webkit-backdrop-filter: blur(25px) !important;
-        border-right: 1px solid rgba(255, 255, 255, 0.12) !important;
-        box-shadow: 10px 0 35px rgba(0, 0, 0, 0.6) !important;
-        transition: left 0.28s cubic-bezier(0.16, 1, 0.3, 1) !important;
-        display: block !important;
+        display: none !important;
+        width: 0 !important;
+        min-width: 0 !important;
+        max-width: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
     }
 
-    /* Reveal sidebar when mouse hovers or class active */
-    body.tokmac-compact aside:hover,
-    body.tokmac-compact [class*="DivSideNavContainer"]:hover,
-    body.tokmac-compact [class*="DivSideNavWrapper"]:hover,
-    body.tokmac-compact.tokmac-sidebar-open aside,
-    body.tokmac-compact.tokmac-sidebar-open [class*="DivSideNavContainer"],
-    body.tokmac-compact.tokmac-sidebar-open [class*="DivSideNavWrapper"] {
-        left: 0 !important;
-    }
-
-    /* Reset all leftover margins and paddings on body & main wrappers to eliminate black bar */
-    body.tokmac-compact,
+    /* Reset leftover margins and paddings on feed wrappers to eliminate left black gap */
     body.tokmac-compact [class*="DivBodyContainer"],
     body.tokmac-compact [class*="DivMainContainer"],
     body.tokmac-compact [class*="DivContentContainer"],
@@ -62,22 +42,20 @@ enum InjectedScripts {
         margin-right: 0 !important;
         padding-right: 0 !important;
         width: 100% !important;
-        max-width: 100% !important;
     }
 
-    /* Video feed item layout: keep video and right-side action buttons aligned */
-    body.tokmac-compact [class*="DivItemContainer"],
-    body.tokmac-compact [class*="DivItemContainerV2"],
-    body.tokmac-compact [class*="DivVideoItemContainer"] {
+    /* Center video feed nicely in compact portrait view */
+    body.tokmac-compact:not(.tokmac-in-detail) [class*="DivItemContainer"],
+    body.tokmac-compact:not(.tokmac-in-detail) [class*="DivItemContainerV2"],
+    body.tokmac-compact:not(.tokmac-in-detail) [class*="DivVideoItemContainer"] {
         display: flex !important;
         justify-content: center !important;
         align-items: flex-end !important;
         margin: 0 auto !important;
-        padding: 0 4px !important;
         box-sizing: border-box !important;
     }
 
-    /* Action buttons (Like, Comment, Favorite, Share) must be fully visible */
+    /* Ensure Like, Comment, Share buttons stay clearly visible */
     [class*="DivActionItemContainer"],
     [class*="DivActionContainer"],
     [data-e2e="feed-action-item"] {
@@ -87,14 +65,14 @@ enum InjectedScripts {
         visibility: visible !important;
     }
 
-    /* Ensure Comment Panel is visible and styled properly */
-    [class*="DivCommentContainer"],
-    [data-e2e="comment-list"],
-    [class*="DivCommentListContainer"],
-    [class*="DivModalContainer"] {
-        visibility: visible !important;
-        opacity: 1 !important;
-        z-index: 1000 !important;
+    /* Video Detail / Comment Modal: Let it expand naturally without being crushed */
+    body.tokmac-in-detail [class*="DivModalContainer"],
+    body.tokmac-in-detail [class*="DivFlexCenterRow"],
+    body.tokmac-in-detail [class*="DivContentContainer"] {
+        width: 100% !important;
+        max-width: 100% !important;
+        display: flex !important;
+        flex-direction: row !important;
     }
 
     /* Smooth sleek scrollbars */
@@ -119,40 +97,17 @@ enum InjectedScripts {
         if (window.__tokmac_injected) return;
         window.__tokmac_injected = true;
 
-        console.log("[TokMac] Injected script v2 initialized.");
+        console.log("[TokMac] Injected script v3 initialized.");
 
         let autoPlayNext = false;
-        let lastCommentState = false;
+        let lastInDetail = false;
 
-        // 1. Force enable native Right-Click Context Menu (stop TikTok from suppressing it)
+        // Force enable native Right-Click Context Menu
         window.addEventListener('contextmenu', function(e) {
             e.stopImmediatePropagation();
         }, true);
 
-        // 2. Setup left edge hover zone to reveal sidebar
-        function setupSidebarHover() {
-            if (document.getElementById('__tokmac_sidebar_hover')) return;
-            const hoverZone = document.createElement('div');
-            hoverZone.id = '__tokmac_sidebar_hover';
-            hoverZone.style.cssText = 'position:fixed;top:0;bottom:0;left:0;width:35px;z-index:999998;background:transparent;cursor:pointer;';
-            hoverZone.addEventListener('mouseenter', () => {
-                document.body.classList.add('tokmac-sidebar-open');
-            });
-            document.body.appendChild(hoverZone);
-
-            document.addEventListener('mousemove', (e) => {
-                if (e.clientX > 280) {
-                    document.body.classList.remove('tokmac-sidebar-open');
-                }
-            });
-        }
-        if (document.body) {
-            setupSidebarHover();
-        } else {
-            document.addEventListener('DOMContentLoaded', setupSidebarHover);
-        }
-
-        // 3. Navigation buttons helpers
+        // Navigation buttons helpers
         function findNextButton() {
             return document.querySelector('button[data-e2e="arrow-down"]') ||
                    document.querySelector('button[aria-label*="Next"]') ||
@@ -230,7 +185,6 @@ enum InjectedScripts {
         };
 
         window.tokmacToggleComments = function() {
-            // Find comment button for the active video
             const v = getActiveVideo();
             let commentBtn = null;
             if (v) {
@@ -309,7 +263,6 @@ enum InjectedScripts {
                 downloadUrl = src;
             }
 
-            // Author and description
             const authorEl = document.querySelector('h3[data-e2e="browse-user-title"]') ||
                              document.querySelector('span[data-e2e="browse-user-title"]') ||
                              document.querySelector('span[data-e2e="user-title"]') ||
@@ -346,28 +299,25 @@ enum InjectedScripts {
                 });
         };
 
-        // Monitor comment panel state
-        function checkCommentPanel() {
-            const commentPanel = document.querySelector('[class*="DivCommentContainer"]') ||
-                                 document.querySelector('[data-e2e="comment-list"]') ||
-                                 document.querySelector('[class*="DivCommentListContainer"]') ||
-                                 document.querySelector('[class*="DivCommentItemContainer"]');
-            let isOpen = false;
-            if (commentPanel) {
-                const rect = commentPanel.getBoundingClientRect();
-                isOpen = rect.width > 50 && rect.height > 50 && window.getComputedStyle(commentPanel).display !== 'none';
-            }
-            if (isOpen !== lastCommentState) {
-                lastCommentState = isOpen;
+        // Monitor whether user is viewing a video detail / comment modal
+        function checkDetailAndCommentState() {
+            const hasModal = document.querySelector('[class*="DivModalContainer"]') !== null;
+            const isVideoUrl = window.location.pathname.includes('/video/');
+            const inDetail = hasModal || isVideoUrl;
+
+            document.body.classList.toggle('tokmac-in-detail', inDetail);
+
+            if (inDetail !== lastInDetail) {
+                lastInDetail = inDetail;
                 if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tokmac) {
                     window.webkit.messageHandlers.tokmac.postMessage({
-                        type: 'commentPanelStateChanged',
-                        isOpen: isOpen
+                        type: 'detailViewChanged',
+                        isOpen: inDetail
                     });
                 }
             }
         }
-        setInterval(checkCommentPanel, 500);
+        setInterval(checkDetailAndCommentState, 400);
 
         // Auto next video hook
         function hookVideos() {
