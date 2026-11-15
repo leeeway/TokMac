@@ -12,7 +12,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
 
     weak var delegate: WebViewControllerDelegate?
 
-    var isCompactMode: Bool = true {
+    var isCompactMode: Bool = false {
         didSet {
             updateCompactModeState()
         }
@@ -31,7 +31,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     }
 
     override func loadView() {
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: 490, height: 820))
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 1080, height: 760))
         view.wantsLayer = true
         view.layer?.backgroundColor = NSColor.black.cgColor
         self.view = view
