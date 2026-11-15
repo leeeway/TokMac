@@ -1,13 +1,12 @@
 import Cocoa
 import WebKit
-import UserNotifications
 
 protocol WebViewControllerDelegate: AnyObject {
     func webViewController(_ controller: WebViewController, didChangeCommentState isOpen: Bool)
 }
 
 final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKDownloadDelegate {
-    private(set) var webView: WKWebView!
+    private(set) var webView: TokWebView!
     private var progressIndicator: NSProgressIndicator!
     private var popupWindows: [NSWindow] = []
 
@@ -48,7 +47,6 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
 
     private func setupWebView() {
         let config = WKWebViewConfiguration()
-        // Ensure cookies and credentials persist across app restarts
         config.websiteDataStore = WKWebsiteDataStore.default()
         config.allowsAirPlayForMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
@@ -57,7 +55,6 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         let userContent = config.userContentController
         userContent.add(self, name: "tokmac")
 
-        // Inject script to handle shortcuts, comment detection & clean layout
         let navScript = WKUserScript(
             source: InjectedScripts.keyboardAndNavigationJS,
             injectionTime: .atDocumentEnd,
@@ -77,7 +74,8 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         )
         userContent.addUserScript(cssScript)
 
-        webView = WKWebView(frame: view.bounds, configuration: config)
+        webView = TokWebView(frame: view.bounds, configuration: config)
+        webView.controller = self
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -86,9 +84,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
             webView.isInspectable = true
         }
 
-        // Standard modern Safari Desktop User-Agent for seamless login & video streaming
         webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
-
         webView.setValue(false, forKey: "drawsBackground")
         view.addSubview(webView)
     }
@@ -181,6 +177,14 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         webView.evaluateJavaScript("window.tokmacToggleComments && window.tokmacToggleComments();", completionHandler: nil)
     }
 
+    func copyCurrentVideoLink() {
+        if let urlString = webView.url?.absoluteString {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(urlString, forType: .string)
+            showNotification(title: "链接已复制", body: urlString)
+        }
+    }
+
     func reloadPage() {
         webView.reload()
     }
@@ -197,14 +201,13 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         }
     }
 
-    // MARK: - Video Downloading
+    // MARK: - Video Downloading (Direct HTTP & Blob support)
     func downloadCurrentVideo() {
         webView.evaluateJavaScript("window.tokmacGetVideoDownloadInfo && window.tokmacGetVideoDownloadInfo();") { [weak self] result, error in
             guard let self = self else { return }
             guard let dict = result as? [String: Any],
-                  let urlString = dict["url"] as? String,
-                  let videoURL = URL(string: urlString) else {
-                self.showNotification(title: "未检测到可下载视频", body: "请先播放一个视频后再点击下载")
+                  let urlString = dict["url"] as? String else {
+                self.showNotification(title: "未找到视频源", body: "请等待视频加载完成或开始播放后再尝试下载")
                 NSSound.beep()
                 return
             }
@@ -212,8 +215,15 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
             let author = (dict["author"] as? String)?.replacingOccurrences(of: "/", with: "_") ?? "TikTok"
             let timestamp = Int(Date().timeIntervalSince1970)
             let filename = "\(author)_\(timestamp).mp4"
+            let isBlob = dict["isBlob"] as? Bool ?? false
 
-            self.performDirectDownload(from: videoURL, suggestedFilename: filename)
+            if isBlob {
+                self.showNotification(title: "正在提取视频流...", body: filename)
+                let js = "window.tokmacDownloadBlob && window.tokmacDownloadBlob('\(urlString)', '\(filename)');"
+                self.webView.evaluateJavaScript(js, completionHandler: nil)
+            } else if let videoURL = URL(string: urlString) {
+                self.performDirectDownload(from: videoURL, suggestedFilename: filename)
+            }
         }
     }
 
@@ -257,9 +267,36 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         task.resume()
     }
 
+    private func saveBase64VideoToFile(base64: String, filename: String) {
+        var cleanBase64 = base64
+        if let commaIndex = cleanBase64.firstIndex(of: ",") {
+            cleanBase64 = String(cleanBase64[cleanBase64.index(after: commaIndex)...])
+        }
+
+        guard let data = Data(base64Encoded: cleanBase64) else {
+            showNotification(title: "视频数据解析失败", body: "未能成功解码视频二进制数据")
+            return
+        }
+
+        let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+        let destinationURL = downloadsDir.appendingPathComponent(filename)
+
+        do {
+            try data.write(to: destinationURL)
+            DispatchQueue.main.async {
+                NSSound(named: "Glass")?.play()
+                self.showDownloadCompletedAlert(fileURL: destinationURL)
+            }
+        } catch {
+            DispatchQueue.main.async {
+                self.showNotification(title: "文件写入失败", body: error.localizedDescription)
+            }
+        }
+    }
+
     private func showDownloadCompletedAlert(fileURL: URL) {
         let alert = NSAlert()
-        alert.messageText = "视频下载完成！"
+        alert.messageText = "🎉 视频下载完成！"
         alert.informativeText = "文件已保存至：\n\(fileURL.path)"
         alert.alertStyle = .informational
         alert.addButton(withTitle: "在 Finder 中显示")
@@ -288,6 +325,13 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
             case "commentPanelStateChanged":
                 let isOpen = body["isOpen"] as? Bool ?? false
                 delegate?.webViewController(self, didChangeCommentState: isOpen)
+
+            case "saveBase64Video":
+                if let base64 = body["base64"] as? String,
+                   let filename = body["filename"] as? String {
+                    saveBase64VideoToFile(base64: base64, filename: filename)
+                }
+
             default:
                 break
             }
