@@ -6,28 +6,22 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
     private let toolbarID = NSToolbar.Identifier("TokMacMainToolbar")
     private let pinItemID = NSToolbarItem.Identifier("TokMacPinItem")
-    private let forYouItemID = NSToolbarItem.Identifier("TokMacForYouItem")
-    private let followingItemID = NSToolbarItem.Identifier("TokMacFollowingItem")
-    private let exploreItemID = NSToolbarItem.Identifier("TokMacExploreItem")
     private let downloadItemID = NSToolbarItem.Identifier("TokMacDownloadItem")
     private let modeItemID = NSToolbarItem.Identifier("TokMacModeItem")
     private let reloadItemID = NSToolbarItem.Identifier("TokMacReloadItem")
 
     convenience init() {
-        // Default to a comfortable desktop width (1080x760) where TikTok shows sidebar, video, and comments naturally on the right
+        // Default to a comfortable desktop width (1080x760)
         let initialRect = NSRect(x: 100, y: 100, width: 1080, height: 760)
         let window = NSWindow(
             contentRect: initialRect,
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
 
         window.title = "TokMac"
-        window.titleVisibility = .hidden
-        window.titlebarAppearsTransparent = true
-        window.isMovableByWindowBackground = true
-        window.backgroundColor = .black
+        window.titleVisibility = .visible
         window.minSize = NSSize(width: 460, height: 560)
 
         window.center()
@@ -46,16 +40,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
         window.toolbar = toolbar
-        window.toolbarStyle = .unifiedCompact
+        window.toolbarStyle = .unified
     }
 
     // MARK: - NSToolbarDelegate
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         return [
             .flexibleSpace,
-            forYouItemID,
-            followingItemID,
-            exploreItemID,
             pinItemID,
             modeItemID,
             downloadItemID,
@@ -66,9 +57,6 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         return [
             .flexibleSpace,
-            forYouItemID,
-            followingItemID,
-            exploreItemID,
             pinItemID,
             modeItemID,
             downloadItemID,
@@ -77,31 +65,14 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        if itemIdentifier == .flexibleSpace {
+            return NSToolbarItem(itemIdentifier: itemIdentifier)
+        }
+
         let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-        item.isNavigational = true
+        item.isNavigational = false
 
         switch itemIdentifier {
-        case forYouItemID:
-            item.label = "推荐"
-            item.toolTip = "首页推荐 (For You)"
-            item.image = NSImage(systemSymbolName: "house", accessibilityDescription: "For You")
-            item.action = #selector(loadForYou)
-            item.target = self
-
-        case followingItemID:
-            item.label = "关注"
-            item.toolTip = "已关注 (Following)"
-            item.image = NSImage(systemSymbolName: "person.2", accessibilityDescription: "Following")
-            item.action = #selector(loadFollowing)
-            item.target = self
-
-        case exploreItemID:
-            item.label = "探索"
-            item.toolTip = "探索与搜索 (Explore)"
-            item.image = NSImage(systemSymbolName: "safari", accessibilityDescription: "Explore")
-            item.action = #selector(loadExplore)
-            item.target = self
-
         case pinItemID:
             item.label = "置顶"
             item.toolTip = "窗口置顶 (Cmd+T)"
