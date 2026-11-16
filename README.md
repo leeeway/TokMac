@@ -5,108 +5,80 @@
 </p>
 
 <p align="center">
-  <b>A lightweight, distraction-free macOS desktop app for TikTok.</b><br>
-  极简、沉浸、超轻量的 macOS 原生 TikTok 桌面客户端。
+  <b>A lightweight, distraction-free desktop app for TikTok (macOS & Windows).</b><br>
+  极简、沉浸、超轻量的 TikTok 桌面客户端（支持 macOS 与 Windows）。
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Platform-macOS%2013%2B-black?logo=apple" alt="Platform" />
-  <img src="https://img.shields.io/badge/Architecture-Apple%20Silicon%20%2F%20Intel-blue" alt="Architecture" />
-  <img src="https://img.shields.io/badge/Language-Swift%206-orange?logo=swift" alt="Language" />
-  <img src="https://img.shields.io/badge/Binary%20Size-~200%20KB-success" alt="Size" />
+  <img src="https://img.shields.io/badge/macOS-13.0%2B-black?logo=apple" alt="macOS" />
+  <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows" alt="Windows" />
+  <img src="https://img.shields.io/badge/Architecture-Universal-blue" alt="Architecture" />
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License" />
 </p>
 
 ---
 
+## 📥 下载安装 / Downloads
+
+前往 [**GitHub Releases**](https://github.com/leeeway/TokMac/releases/latest) 下载对应平台最新版本：
+
+| 平台 (Platform) | 下载文件 (File) | 说明 (Description) |
+| :--- | :--- | :--- |
+| **macOS** | [`TokMac-1.0.0.dmg`](https://github.com/leeeway/TokMac/releases/latest) | 双击打开 DMG，拖入 Applications 即可使用 |
+| **Windows** (安装向导) | [`TokMac-Setup-1.0.0.exe`](https://github.com/leeeway/TokMac/releases/latest) | Windows 快速安装向导，自动创建桌面与开始菜单图标 |
+| **Windows** (免安装便携版) | [`TokMac-Windows-Portable.zip`](https://github.com/leeeway/TokMac/releases/latest) | 解压后直接双击 `TokMac.exe` 即可运行，零依赖 |
+
+---
+
 ## ✨ 核心亮点 / Features
 
-- 📱 **专为刷视频设计的比例**：默认采用 420×780 仿手机黄金比例窗口，边角挂屏摸鱼极其舒适。
-- 📌 **窗口置顶 (Always on Top)**：支持一键将窗口置顶于所有应用最前端，快捷键 `Cmd + T`。
-- ⚡️ **丝滑键盘快捷键**：
-  - `↓` 或 `J` / `S`：切换下一个视频
-  - `↑` 或 `K` / `W`：切换上一个视频
-  - `Space`：播放 / 暂停
-  - `M`：静音 / 取消静音
-  - `L`：点赞视频
-- 🔐 **支持完整账号登录 & 长期免登**：
-  - 基于 macOS 原生 `WKWebsiteDataStore`，持久化保留 Cookies & Session，免去重复登录困扰；
-  - 完美支持 Google、Apple ID、Twitter、手机号等第三方 OAuth 弹窗登录。
-- 🧼 **纯净去干扰模式**：自动屏蔽网页端冗余的“下载桌面版 APP”、各种营销弹窗与宽屏大边栏，回归纯净内容流。
-- 🪶 **极度轻量与节能**：基于原生 WebKit 框架打造，运行内存仅约 **30~60 MB**（相比 Electron 节省 90% 内存），二进制体积不足 **1 MB**。
-- 🔄 **自动连播功能**：视频播完后可自动滑至下一个视频，解放双手。
+- 🖥️ **跨平台原生引擎**：
+  - **macOS**：基于 Swift 6 + WebKit 原生架构，内存占用约 40-70 MB，无 Electron 臃肿包袱。
+  - **Windows**：基于 .NET 8 + Microsoft Edge WebView2 打造，支持 Windows 11 暗黑主题与任务栏进度。
+- 📱/💻 **双模式一键切换**：
+  - **宽屏舒适模式 (1080×760)**：完整展现频道侧边栏与视频，右侧评论区宽敞展开，阅读互动毫无遮挡。
+  - **竖屏挂屏模式 (520×840)**：仿手机黄金比例，边写代码边摸鱼刷视频。
+- ⬇️ **视频智能下载 & 实时进度**：
+  - 支持快捷键 `Cmd+S` / `Ctrl+S`、工具栏按钮及鼠标右键下载。
+  - 自由弹窗选择保存文件夹与文件名。
+  - 原生毛玻璃悬浮进度条（HUD），实时显示下载进度与大小，下载完成可一键在访达/资源管理器中直达定位。
+- 📌 **窗口一键置顶 (Always on Top)**：点击工具栏或按快捷键置顶，保持窗口永远浮在其他软件之上。
+- 🔐 **支持完整账号登录 & 长期免登**：持久化保留 Cookies & Session，完美支持 Google、Apple ID、手机验证码等登录。
+- 🧼 **纯净去干扰**：自动过滤各类下载手机 App 的干扰横幅，还原纯净浏览体验。
 
 ---
 
 ## ⌨️ 常用快捷键 / Keyboard Shortcuts
 
-| 快捷键 | 功能描述 / Description |
-| :--- | :--- |
-| `↓` / `J` | 切换下一个视频 (Next Video) |
-| `↑` / `K` | 切换上一个视频 (Previous Video) |
-| `Space` | 播放 / 暂停 (Play / Pause) |
-| `M` | 静音 / 恢复声音 (Mute / Unmute) |
-| `L` | 点赞当前视频 (Like Video) |
-| `Cmd + T` | 切换窗口置顶 (Toggle Always on Top) |
-| `Cmd + 1` | 切换手机竖屏模式 (Phone Mode 420×780) |
-| `Cmd + 2` | 切换宽屏桌面模式 (Desktop Mode 1080×750) |
-| `Cmd + 3` | 切换极简迷你模式 (Mini Mode 340×600) |
-| `Cmd + Shift + C` | 切换纯净模式 (Toggle Clean Mode) |
-| `Cmd + Shift + A` | 切换自动连播下一个 (Toggle Auto Next) |
-| `Cmd + R` | 刷新页面 (Reload) |
-| `Cmd + [` | 返回上一页 (Go Back) |
-| `Cmd + ]` | 前进到下一页 (Go Forward) |
+| 功能 (Feature) | macOS 快捷键 | Windows 快捷键 |
+| :--- | :--- | :--- |
+| **下载当前视频** | `Cmd + S` | `Ctrl + S` |
+| **切换窗口置顶** | `Cmd + T` | `Ctrl + T` |
+| **切换竖屏小窗** | `Cmd + 1` | `Ctrl + 1` |
+| **切换宽屏桌面** | `Cmd + 2` | `Ctrl + 2` |
+| **刷新页面** | `Cmd + R` | `F5` / `Ctrl + R` |
+| **全屏切换** | `Cmd + Ctrl + F` | `F11` |
 
 ---
 
-## 🛠️ 构建与运行 / Build from Source
+## 🛠️ 本地编译构建 / Build from Source
 
-### 环境要求
-- macOS 13.0+ (Ventura, Sonoma, Sequoia)
-- Xcode Command Line Tools 或 Swift 5.9+
-
-### 一键构建与启动
+### macOS (Swift)
 ```bash
-# 1. 克隆代码库
 git clone https://github.com/leeeway/TokMac.git
 cd TokMac
-
-# 2. 编译打包出原生 TokMac.app
-./build_app.sh
-
-# 3. 运行应用
-open build/TokMac.app
+./create_dmg.sh
 ```
 
-您也可以直接使用 Swift 运行：
-```bash
-swift run TokMac
-```
-
----
-
-## 📂 项目结构 / Project Structure
-
-```text
-TokMac/
-├── Package.swift               # Swift Package Manager 构建文件
-├── build_app.sh                # 一键编译并打包生成 TokMac.app
-├── Resources/
-│   ├── AppIcon.icns            # macOS 高清应用图标
-│   ├── AppIcon_1024.png        # 1024x1024 设计源图
-│   ├── Info.plist              # 应用 Bundle 元数据
-│   └── generate_icon.py        # 图标生成脚本
-└── Sources/TokMac/
-    ├── main.swift              # 程序入口
-    ├── AppDelegate.swift       # 应用生命周期与全局快捷菜单
-    ├── MainWindowController.swift # 沉浸式窗口与状态控制
-    ├── WebViewController.swift # WebKit 控制器、会话持久化与登录弹窗兼容
-    └── InjectedScripts.swift   # 去广告纯净样式与按键映射脚本
+### Windows (.NET 8 + WebView2)
+```powershell
+git clone https://github.com/leeeway/TokMac.git
+cd TokMac\windows
+dotnet publish TokMac.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o ..\build_win
 ```
 
 ---
 
 ## 📄 开源许可 / License
 
-本项目基于 [MIT License](LICENSE) 开源。
-欢迎提出 Issue 和 Pull Request！
+本项目基于 [MIT 许可证](LICENSE) 开源发布。

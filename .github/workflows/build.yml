@@ -1,0 +1,97 @@
+name: Build & Release (macOS & Windows)
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: Build macOS DMG
+    runs-on: macos-14
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Make scripts executable
+        run: chmod +x build_app.sh create_dmg.sh
+
+      - name: Build macOS App & DMG
+        run: ./create_dmg.sh
+
+      - name: Upload macOS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: build/TokMac-1.0.0.dmg
+
+  build-windows:
+    name: Build Windows App & Installer
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress
+
+      - name: Publish Windows Standalone Executable
+        run: |
+          dotnet publish windows/TokMac.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o build_win
+
+      - name: Build Inno Setup Installer & Portable Zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build_installer
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' windows/installer.iss
+          Compress-Archive -Path build_win/TokMac.exe -DestinationPath build_installer/TokMac-Windows-Portable.zip
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-binaries
+          path: |
+            build_installer/TokMac-Setup-1.0.0.exe
+            build_installer/TokMac-Windows-Portable.zip
+
+  publish-release:
+    name: Publish Release Assets to GitHub
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download macOS Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-dmg
+          path: release_assets/
+
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-binaries
+          path: release_assets/
+
+      - name: Publish to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Create or update release v1.0.0
+          if gh release view v1.0.0 >/dev/null 2>&1; then
+            echo "Updating existing release v1.0.0..."
+            gh release upload v1.0.0 release_assets/* --clobber
+          else
+            echo "Creating release v1.0.0..."
+            gh release create v1.0.0 release_assets/* --title "TokMac v1.0.0 (macOS & Windows)" --notes "Official cross-platform release for macOS and Windows."
+          fi
