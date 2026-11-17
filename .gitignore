@@ -22,3 +22,10 @@ DerivedData/
 # Secrets / local
 .env
 *.local
+/build/*.json
+/build/*.notary-result.json
+/tests/windows-ui/bin/
+/tests/windows-ui/obj/
+__pycache__/
+*.p12
+*.p8

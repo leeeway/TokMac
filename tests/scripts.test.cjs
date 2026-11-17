@@ -17,7 +17,7 @@ function fixture({ headReady = true, source = 'blob:https://www.tiktok.com/curre
     const videos = [video];
     const window = {
         location: { protocol: 'https:', hostname: host, origin: `https://${host}`, pathname: '/foryou' },
-        innerWidth: 1000, innerHeight: 800, addEventListener() {}, scrollBy() {},
+        innerWidth: 1000, innerHeight: 800, addEventListener: (name, callback) => events[name] = callback, scrollBy() {},
         __UNIVERSAL_DATA_FOR_REHYDRATION__: metadata
     };
     window.top = frame ? {} : window;
@@ -98,4 +98,50 @@ test('foreign Blob and non-Blob native download requests are rejected', () => {
 test('untrusted pages and subframes receive no native download helpers', () => {
     assert.equal(fixture({ host: 'tiktok.com.evil.example' }).window.tokmacDownloadBlob, undefined);
     assert.equal(fixture({ frame: true }).window.tokmacDownloadBlob, undefined);
+});
+
+function keyEvent(key, extra = {}) {
+    return { key, target: { closest: () => null }, preventDefault() { this.prevented = true; },
+        stopImmediatePropagation() { this.stopped = true; }, ...extra };
+}
+
+test('unmodified playback keys work without handling system shortcuts', () => {
+    const f = fixture();
+    const event = keyEvent('m');
+    f.events.keydown(event);
+    assert.equal(f.video.muted, true);
+    assert.equal(event.prevented, true);
+    assert.equal(event.stopped, true);
+    for (const key of ['c', 'm', 'a', 'v', 'z']) {
+        const system = keyEvent(key, { metaKey: true });
+        f.events.keydown(system);
+        assert.equal(system.prevented, undefined);
+    }
+});
+
+test('comments, search fields, editable descendants and IME retain their keys', () => {
+    const f = fixture();
+    for (const key of [' ', 'm', 'c', 'j', 'ArrowDown']) {
+        for (const target of [{ closest: () => ({}) }, { isContentEditable: true, closest: () => null }]) {
+            const event = keyEvent(key, { target });
+            f.events.keydown(event);
+            assert.equal(event.prevented, undefined);
+        }
+        const composing = keyEvent(key, { isComposing: true });
+        f.events.keydown(composing);
+        assert.equal(composing.prevented, undefined);
+        f.document.activeElement = { isContentEditable: true };
+        const focused = keyEvent(key);
+        f.events.keydown(focused);
+        assert.equal(focused.prevented, undefined);
+        f.document.activeElement = null;
+    }
+    assert.equal(f.video.muted, undefined);
+});
+
+test('held playback keys do not repeatedly toggle state', () => {
+    const f = fixture();
+    f.events.keydown(keyEvent('m'));
+    f.events.keydown(keyEvent('m', { repeat: true }));
+    assert.equal(f.video.muted, true);
 });

@@ -48,3 +48,4 @@ try
     Console.WriteLine("Windows download validation and atomic-save checks passed.");
 }
 finally { Directory.Delete(directory, true); }
+await DownloadHttpTests.Run();

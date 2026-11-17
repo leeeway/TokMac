@@ -1,6 +1,6 @@
 import Cocoa
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, PlaybackActions {
     private var mainWindowController: MainWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -41,6 +41,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         fileMenuItem.submenu = fileMenu
         mainMenu.addItem(fileMenuItem)
 
+        let editMenuItem = NSMenuItem()
+        editMenuItem.submenu = ApplicationMenus.editing()
+        mainMenu.addItem(editMenuItem)
+
         // 3. View Menu
         let viewMenuItem = NSMenuItem()
         let viewMenu = NSMenu(title: "视图")
@@ -64,11 +68,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         viewMenu.addItem(NSMenuItem.separator())
 
-        let phoneItem = NSMenuItem(title: "手机竖屏模式 (490×820)", action: #selector(setPhoneMode), keyEquivalent: "1")
+        let phoneItem = NSMenuItem(title: "手机竖屏模式 (520×840)", action: #selector(setPhoneMode), keyEquivalent: "1")
         phoneItem.target = self
         viewMenu.addItem(phoneItem)
 
-        let desktopItem = NSMenuItem(title: "宽屏桌面模式 (1080×780)", action: #selector(setDesktopMode), keyEquivalent: "2")
+        let desktopItem = NSMenuItem(title: "宽屏桌面模式 (1080×760)", action: #selector(setDesktopMode), keyEquivalent: "2")
         desktopItem.target = self
         viewMenu.addItem(desktopItem)
 
@@ -90,30 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 4. Playback Menu
         let playMenuItem = NSMenuItem()
-        let playMenu = NSMenu(title: "播放控制")
-
-        let nextItem = NSMenuItem(title: "下一个视频 (↓ / J)", action: #selector(nextVideo), keyEquivalent: "j")
-        nextItem.target = self
-        playMenu.addItem(nextItem)
-
-        let prevItem = NSMenuItem(title: "上一个视频 (↑ / K)", action: #selector(prevVideo), keyEquivalent: "k")
-        prevItem.target = self
-        playMenu.addItem(prevItem)
-
-        let playPauseItem = NSMenuItem(title: "播放 / 暂停 (空格)", action: #selector(togglePlay), keyEquivalent: " ")
-        playPauseItem.keyEquivalentModifierMask = []
-        playPauseItem.target = self
-        playMenu.addItem(playPauseItem)
-
-        let muteItem = NSMenuItem(title: "静音 / 恢复声音 (M)", action: #selector(toggleMute), keyEquivalent: "m")
-        muteItem.target = self
-        playMenu.addItem(muteItem)
-
-        let toggleCommentsItem = NSMenuItem(title: "展开 / 关闭评论区 (C)", action: #selector(toggleComments), keyEquivalent: "c")
-        toggleCommentsItem.target = self
-        playMenu.addItem(toggleCommentsItem)
-
-        playMenuItem.submenu = playMenu
+        playMenuItem.submenu = ApplicationMenus.playback(target: self)
         mainMenu.addItem(playMenuItem)
 
         // 5. Window Menu
@@ -167,23 +148,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainWindowController?.goForward()
     }
 
-    @objc private func nextVideo() {
+    @objc func nextVideo() {
         mainWindowController?.nextVideo()
     }
 
-    @objc private func prevVideo() {
+    @objc func prevVideo() {
         mainWindowController?.prevVideo()
     }
 
-    @objc private func togglePlay() {
+    @objc func togglePlay() {
         mainWindowController?.togglePlay()
     }
 
-    @objc private func toggleMute() {
+    @objc func toggleMute() {
         mainWindowController?.toggleMute()
     }
 
-    @objc private func toggleComments() {
+    @objc func toggleComments() {
         mainWindowController?.toggleComments()
     }
 }

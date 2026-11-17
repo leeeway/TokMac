@@ -10,4 +10,8 @@ if [[ "${1:-}" == "--webkit" ]]; then
     swiftc -module-cache-path "${TMPDIR:-/tmp}/tokmac-test-module-cache" \
         Sources/TokMacCore/DownloadFile.swift tests/NativeBlobSmoke.swift -o "$TEST_DIR/blob-test"
     "$TEST_DIR/blob-test"
+    swiftc -module-cache-path "${TMPDIR:-/tmp}/tokmac-test-module-cache" \
+        Sources/TokMac/PopupWindowStore.swift Sources/TokMac/ApplicationMenus.swift \
+        Sources/TokMac/MainWindowController.swift tests/AppKitRegression.swift -o "$TEST_DIR/appkit-test"
+    "$TEST_DIR/appkit-test"
 fi

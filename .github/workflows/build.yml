@@ -32,6 +32,10 @@ jobs:
           node-version: '22'
       - name: Test shared browser script
         run: node --test tests/scripts.test.cjs
+      - name: Test release validation
+        run: |
+          python3 tests/release_validation_test.py
+          python3 tests/signing_flow_test.py
 
   build-macos:
     name: Test & Build macOS DMG
@@ -39,8 +43,19 @@ jobs:
     runs-on: macos-latest
     env:
       APP_VERSION: ${{ needs.version.outputs.version }}
+      TOKMAC_SIGNING_MODE: development
     steps:
       - uses: actions/checkout@v4
+      - name: Configure Developer ID signing and notarization
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name != 'pull_request' && vars.MACOS_SIGNING_ENABLED == 'true')
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: ./.github/scripts/configure-macos-signing.sh
       - name: Test download validation and file safety
         run: ./tests/run-swift-tests.sh --webkit
       - name: Build macOS App & DMG
@@ -48,8 +63,16 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: macos-dmg
-          path: build/TokMac-*.dmg
+          path: |
+            build/TokMac-*.dmg
+            build/macos-release-status.json
           if-no-files-found: error
+      - name: Remove temporary signing credentials
+        if: always()
+        run: |
+          keychain="$RUNNER_TEMP/tokmac-signing/signing.keychain-db"
+          if [[ -f "$keychain" ]]; then security delete-keychain "$keychain"; fi
+          rm -rf "$RUNNER_TEMP/tokmac-signing"
 
   build-windows:
     name: Test & Build Windows App & Installer
@@ -61,9 +84,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
       - name: Test download file safety
         run: dotnet run --project tests/windows/DownloadFileTests.csproj -c Release
+      - name: Test native full screen and window restoration
+        run: dotnet run --project tests/windows-ui/WindowTests.csproj -c Release
       - name: Install Inno Setup
         run: choco install innosetup --no-progress
       - name: Publish Windows Standalone Executable
@@ -100,6 +125,10 @@ jobs:
         with:
           name: windows-binaries
           path: release_assets/
+      - name: Verify signed release packages
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+        run: python3 scripts/verify-release.py release_assets "$APP_VERSION"
       - name: Publish to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -110,4 +139,5 @@ jobs:
             echo "Release $RELEASE_TAG already exists; keeping its assets."
             exit 0
           fi
-          gh release create "$RELEASE_TAG" release_assets/* --verify-tag --title "TokMac $RELEASE_TAG" --generate-notes
+          version="${RELEASE_TAG#v}"
+          gh release create "$RELEASE_TAG" "release_assets/TokMac-${version}.dmg" "release_assets/TokMac-Setup-${version}.exe" release_assets/TokMac-Windows-Portable.zip --verify-tag --title "TokMac $RELEASE_TAG" --generate-notes

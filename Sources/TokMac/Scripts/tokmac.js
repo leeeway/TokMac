@@ -125,6 +125,26 @@ div[class*="DivTopNavDownloadLink"] {
         if (commentBtn) commentBtn.click();
     };
 
+    function isEditing(element) {
+        return !!element && (element.isContentEditable ||
+            !!element.closest?.('input, textarea, select, [role="textbox"], [role="combobox"], button, a[href], [role="button"]'));
+    }
+
+    window.addEventListener('keydown', function(event) {
+        if (event.defaultPrevented || event.isComposing || event.keyCode === 229 ||
+            event.metaKey || event.ctrlKey || event.altKey || event.shiftKey ||
+            document.designMode === 'on' || isEditing(event.target) || isEditing(document.activeElement)) return;
+        const action = {
+            j: window.tokmacNextVideo, ArrowDown: window.tokmacNextVideo,
+            k: window.tokmacPrevVideo, ArrowUp: window.tokmacPrevVideo,
+            ' ': window.tokmacTogglePlay, m: window.tokmacToggleMute, c: window.tokmacToggleComments
+        }[event.key];
+        if (!action || !getActiveVideo()) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (!event.repeat) action();
+    }, true);
+
     function httpURL(value) {
         if (typeof value !== 'string') return null;
         try {

@@ -131,7 +131,21 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         guard let window = window else { return }
         isAlwaysOnTop.toggle()
         window.level = isAlwaysOnTop ? .floating : .normal
-        window.toolbar?.validateVisibleItems()
+        updateToolbarState()
+    }
+
+    private func updateToolbarState() {
+        for item in window?.toolbar?.items ?? [] {
+            switch item.itemIdentifier {
+            case pinItemID:
+                item.image = NSImage(systemSymbolName: isAlwaysOnTop ? "pin.fill" : "pin", accessibilityDescription: "Pin")
+                item.toolTip = "窗口置顶：\(isAlwaysOnTop ? "已开启" : "已关闭") (Cmd+T)"
+            case modeItemID:
+                item.image = NSImage(systemSymbolName: webViewController.isCompactMode ? "macbook" : "iphone", accessibilityDescription: "Layout")
+                item.toolTip = webViewController.isCompactMode ? "切换到桌面模式 (Cmd+2)" : "切换到竖屏模式 (Cmd+1)"
+            default: break
+            }
+        }
     }
 
     @objc func toggleLayoutMode() {
@@ -151,7 +165,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         frame.origin.y += (frame.size.height - targetHeight)
         frame.size = NSSize(width: targetWidth, height: targetHeight)
         window.setFrame(frame, display: true, animate: true)
-        window.toolbar?.validateVisibleItems()
+        updateToolbarState()
     }
 
     @objc func setDesktopMode() {
@@ -163,7 +177,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         frame.origin.y += (frame.size.height - targetHeight)
         frame.size = NSSize(width: targetWidth, height: targetHeight)
         window.setFrame(frame, display: true, animate: true)
-        window.toolbar?.validateVisibleItems()
+        updateToolbarState()
     }
 
     @objc func reloadPage() {

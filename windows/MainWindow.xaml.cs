@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics;
 using System.IO;
-using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
@@ -23,6 +22,12 @@ namespace TokMac
         private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
 
         private bool isCompactMode = false;
+        private bool isFullScreen;
+        private WindowState savedWindowState;
+        private WindowStyle savedWindowStyle;
+        private ResizeMode savedResizeMode;
+        private Rect savedBounds;
+        private GridLength savedToolbarHeight;
         private string? currentDownloadedFilePath;
         private Guid? activeDownloadID;
         private BlobRequest? pendingBlob;
@@ -45,7 +50,7 @@ namespace TokMac
         {
             InitializeComponent();
             Loaded += MainWindow_Loaded;
-            KeyDown += MainWindow_KeyDown;
+            PreviewKeyDown += MainWindow_KeyDown;
             Closed += (_, _) =>
             {
                 downloadCts?.Cancel();
@@ -216,13 +221,13 @@ namespace TokMac
             ShowHUDStart(Path.GetFileName(destination));
             try
             {
-                using var client = new HttpClient();
-                client.DefaultRequestHeaders.Add("Referer", "https://www.tiktok.com/");
-                client.DefaultRequestHeaders.Add("User-Agent", webView.CoreWebView2.Settings.UserAgent);
-                var cookies = await webView.CoreWebView2.CookieManager.GetCookiesAsync(url);
-                if (cookies.Count > 0)
-                    client.DefaultRequestHeaders.Add("Cookie", string.Join("; ", System.Linq.Enumerable.Select(cookies, c => c.Name + "=" + c.Value)));
-                using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, token);
+                using var client = new DownloadHttpClient();
+                using var response = await client.GetAsync(new Uri(url), webView.CoreWebView2.Settings.UserAgent,
+                    async target =>
+                    {
+                        var cookies = await webView.CoreWebView2.CookieManager.GetCookiesAsync(target.AbsoluteUri);
+                        return string.Join("; ", System.Linq.Enumerable.Select(cookies, c => c.Name + "=" + c.Value));
+                    }, token);
                 response.EnsureSuccessStatusCode();
                 if (!DownloadFile.IsVideoMime(response.Content.Headers.ContentType?.MediaType))
                     throw new IOException("服务器返回的内容不是视频");
@@ -426,6 +431,7 @@ namespace TokMac
 
         private void BtnLayout_Click(object sender, RoutedEventArgs e)
         {
+            if (isFullScreen) ToggleFullScreen();
             isCompactMode = !isCompactMode;
             if (isCompactMode)
             {
@@ -444,6 +450,42 @@ namespace TokMac
         private void BtnReload_Click(object sender, RoutedEventArgs e)
         {
             webView.CoreWebView2?.Reload();
+        }
+
+        internal void ToggleFullScreen()
+        {
+            if (!isFullScreen)
+            {
+                savedWindowState = WindowState;
+                savedWindowStyle = WindowStyle;
+                savedResizeMode = ResizeMode;
+                savedBounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
+                savedToolbarHeight = toolbarRow.Height;
+                WindowState = WindowState.Normal;
+                WindowStyle = WindowStyle.None;
+                ResizeMode = ResizeMode.NoResize;
+                toolbarBar.Visibility = Visibility.Collapsed;
+                toolbarRow.Height = new GridLength(0);
+                WindowState = WindowState.Maximized;
+                isFullScreen = true;
+            }
+            else
+            {
+                WindowState = WindowState.Normal;
+                WindowStyle = savedWindowStyle;
+                ResizeMode = savedResizeMode;
+                if (!savedBounds.IsEmpty)
+                {
+                    Left = savedBounds.Left;
+                    Top = savedBounds.Top;
+                    Width = savedBounds.Width;
+                    Height = savedBounds.Height;
+                }
+                toolbarBar.Visibility = Visibility.Visible;
+                toolbarRow.Height = savedToolbarHeight;
+                WindowState = savedWindowState;
+                isFullScreen = false;
+            }
         }
 
         private async void MainWindow_KeyDown(object sender, KeyEventArgs e)
@@ -481,10 +523,15 @@ namespace TokMac
                 e.Handled = true;
                 BtnReload_Click(sender, e);
             }
+            else if (e.Key == Key.Escape && isFullScreen)
+            {
+                e.Handled = true;
+                ToggleFullScreen();
+            }
             else if (e.Key == Key.F11)
             {
                 e.Handled = true;
-                WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+                ToggleFullScreen();
             }
         }
     }

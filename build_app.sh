@@ -3,6 +3,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+source ./scripts/macos-signing.sh
+validate_signing_configuration
+
 echo "🔨 Building TokMac (Release mode)..."
 APP_VERSION="${APP_VERSION:-$(cat VERSION)}"
 if [[ ! "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -40,8 +43,13 @@ done
 
 chmod +x "${APP_DIR}/Contents/MacOS/TokMac"
 
-echo "🔏 Ad-hoc code signing..."
-codesign --force --deep --sign - "${APP_DIR}"
-codesign --verify --deep --strict "${APP_DIR}"
-
-echo "✅ Built ${APP_DIR} (${APP_VERSION}, Universal). Drag it into Applications to install."
+if [[ "$TOKMAC_SIGNING_MODE" == distribution ]]; then
+    echo "🔏 Signing with Developer ID and hardened runtime..."
+    sign_distribution_file "$APP_DIR"
+    echo "✅ Signed Universal app built. Run create_dmg.sh to notarize and package it."
+else
+    echo "🔏 Ad-hoc signing for local development..."
+    codesign --force --deep --sign - "${APP_DIR}"
+    codesign --verify --deep --strict "${APP_DIR}"
+    echo "✅ Development build at ${APP_DIR} (${APP_VERSION}, Universal). Not notarized for public distribution."
+fi

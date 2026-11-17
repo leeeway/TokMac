@@ -11,7 +11,7 @@ final class TokWebView: WKWebView {
         downloadItem.target = self
         menu.insertItem(downloadItem, at: 0)
 
-        let commentItem = NSMenuItem(title: "💬 查看 / 隐藏评论 (C)", action: #selector(handleComments), keyEquivalent: "c")
+        let commentItem = NSMenuItem(title: "💬 查看 / 隐藏评论 (C)", action: #selector(handleComments), keyEquivalent: "")
         commentItem.target = self
         menu.insertItem(commentItem, at: 1)
 

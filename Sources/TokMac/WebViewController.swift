@@ -10,7 +10,7 @@ protocol WebViewControllerDelegate: AnyObject {
 final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
     private(set) var webView: TokWebView!
     private var progressIndicator: NSProgressIndicator!
-    private var popupWindows: [NSWindow] = []
+    private let popupWindows = PopupWindowStore()
     private var downloadHUD: DownloadHUDView?
     // All download state is owned by the main thread (WebKit delegate callbacks).
     private var downloadID: UUID?
@@ -475,17 +475,14 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         popupWebView.customUserAgent = webView.customUserAgent
 
         popupWindow.contentView?.addSubview(popupWebView)
+        popupWindows.retain(popupWindow)
         popupWindow.makeKeyAndOrderFront(nil)
-        popupWindows.append(popupWindow)
 
         return popupWebView
     }
 
     func webViewDidClose(_ webView: WKWebView) {
-        if let window = webView.window, let index = popupWindows.firstIndex(of: window) {
-            window.close()
-            popupWindows.remove(at: index)
-        }
+        if let window = webView.window { popupWindows.close(window) }
     }
 
     deinit {
