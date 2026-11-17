@@ -1,23 +1,24 @@
 import Cocoa
 import WebKit
 import UniformTypeIdentifiers
+import TokMacCore
 
 protocol WebViewControllerDelegate: AnyObject {
     func webViewController(_ controller: WebViewController, didChangeDetailState isOpen: Bool)
 }
 
-final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKDownloadDelegate, URLSessionDownloadDelegate {
+final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
     private(set) var webView: TokWebView!
     private var progressIndicator: NSProgressIndicator!
     private var popupWindows: [NSWindow] = []
-    private var pendingBlobDestinationURL: URL?
     private var downloadHUD: DownloadHUDView?
-    private var downloadTaskDestinations: [URLSessionDownloadTask: URL] = [:]
-
-    private lazy var customDownloadSession: URLSession = {
-        let config = URLSessionConfiguration.default
-        return URLSession(configuration: config, delegate: self, delegateQueue: nil)
-    }()
+    // All download state is owned by the main thread (WebKit delegate callbacks).
+    private var downloadID: UUID?
+    private var activeDownload: WKDownload?
+    private var destinationURL: URL?
+    private var temporaryURL: URL?
+    private var progressObservation: NSKeyValueObservation?
+    private var isCommittingDownload = false
 
     weak var delegate: WebViewControllerDelegate?
 
@@ -62,26 +63,13 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         config.preferences.isElementFullscreenEnabled = true
 
         let userContent = config.userContentController
-        userContent.add(self, name: "tokmac")
 
         let navScript = WKUserScript(
             source: InjectedScripts.keyboardAndNavigationJS,
             injectionTime: .atDocumentEnd,
-            forMainFrameOnly: false
+            forMainFrameOnly: true
         )
         userContent.addUserScript(navScript)
-
-        let cssScript = WKUserScript(
-            source: """
-            const style = document.createElement('style');
-            style.id = '__tokmac_clean_style';
-            style.textContent = `\(InjectedScripts.cleanModeCSS)`;
-            document.head.appendChild(style);
-            """,
-            injectionTime: .atDocumentEnd,
-            forMainFrameOnly: false
-        )
-        userContent.addUserScript(cssScript)
 
         webView = TokWebView(frame: view.bounds, configuration: config)
         webView.controller = self
@@ -247,37 +235,83 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     }
 
     func downloadCurrentVideo() {
+        guard downloadID == nil, DownloadFile.isTrustedPage(webView.url) else { NSSound.beep(); return }
+        let id = UUID()
+        downloadID = id
+        let pageURL = webView.url
         webView.evaluateJavaScript("window.tokmacGetVideoDownloadInfo && window.tokmacGetVideoDownloadInfo();") { [weak self] result, error in
-            guard let self = self else { return }
-            guard let dict = result as? [String: Any],
-                  let urlString = dict["url"] as? String else {
-                let hud = self.showDownloadHUD()
-                hud.showError(message: "请等待视频加载完成或播放后再尝试下载")
-                NSSound.beep()
+            guard let self, self.downloadID == id else { return }
+            guard self.webView.url == pageURL,
+                  let dict = result as? [String: Any], let source = dict["url"] as? String,
+                  let url = URL(string: source), DownloadFile.isVideoSource(url, pageURL: pageURL) else {
+                self.failDownload("请等待视频加载完成或播放后再尝试下载")
                 return
             }
-
-            let author = (dict["author"] as? String)?
+            let author = (dict["author"] as? String ?? "TikTok")
                 .replacingOccurrences(of: "/", with: "_")
                 .replacingOccurrences(of: ":", with: "_")
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "TikTok"
-            let timestamp = Int(Date().timeIntervalSince1970)
-            let filename = "\(author)_\(timestamp).mp4"
-            let isBlob = dict["isBlob"] as? Bool ?? false
-
-            self.promptUserForSaveDestination(suggestedFilename: filename) { [weak self] destinationURL in
-                guard let self = self, let destinationURL = destinationURL else { return }
-
-                if isBlob {
-                    self.pendingBlobDestinationURL = destinationURL
-                    let hud = self.showDownloadHUD()
-                    hud.setIndeterminate(title: "正在提取视频流...", subtitle: destinationURL.lastPathComponent)
-                    let js = "window.tokmacDownloadBlob && window.tokmacDownloadBlob('\(urlString)', '\(destinationURL.lastPathComponent)');"
-                    self.webView.evaluateJavaScript(js, completionHandler: nil)
-                } else if let videoURL = URL(string: urlString) {
-                    self.performDirectDownload(from: videoURL, destinationURL: destinationURL)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let filename = "\(author)_\(Int(Date().timeIntervalSince1970)).mp4"
+            self.promptUserForSaveDestination(suggestedFilename: filename) { [weak self] selectedURL in
+                guard let self, self.downloadID == id else { return }
+                guard let selectedURL else { self.resetDownload(); return }
+                guard self.webView.url == pageURL else {
+                    self.failDownload("页面已切换，请重新选择视频")
+                    return
+                }
+                self.destinationURL = selectedURL
+                self.showDownloadHUD().setIndeterminate(title: "正在连接视频...", subtitle: selectedURL.lastPathComponent)
+                self.downloadHUD?.onCancel = { [weak self] in self?.cancelDownload() }
+                var request = URLRequest(url: url)
+                request.setValue("https://www.tiktok.com/", forHTTPHeaderField: "Referer")
+                // WebKit streams both HTTP and Blob URLs and shares the page's cookies.
+                self.webView.startDownload(using: request) { [weak self] download in
+                    guard let self, self.downloadID == id else { download.cancel { _ in }; return }
+                    self.attach(download)
                 }
             }
+        }
+    }
+
+    private func attach(_ download: WKDownload) {
+        activeDownload = download
+        download.delegate = self
+        progressObservation = download.progress.observe(\.fractionCompleted, options: [.new]) { [weak self, weak download] progress, _ in
+            let written = progress.completedUnitCount
+            let total = progress.totalUnitCount
+            DispatchQueue.main.async {
+                guard let self, let download, self.activeDownload === download, !self.isCommittingDownload else { return }
+                if total > 0 {
+                    self.downloadHUD?.updateProgress(fraction: Double(written) / Double(total), writtenBytes: written, totalBytes: total)
+                }
+            }
+        }
+    }
+
+    private func resetDownload() {
+        progressObservation = nil
+        activeDownload = nil
+        downloadID = nil
+        destinationURL = nil
+        isCommittingDownload = false
+        downloadHUD?.onCancel = nil
+        if let temporaryURL { try? FileManager.default.removeItem(at: temporaryURL) }
+        temporaryURL = nil
+    }
+
+    private func failDownload(_ message: String) {
+        resetDownload()
+        showDownloadHUD().showError(message: message)
+    }
+
+    private func cancelDownload() {
+        guard !isCommittingDownload else { return }
+        let download = activeDownload
+        let temporary = temporaryURL
+        resetDownload()
+        // Wait for WebKit to close its file before removing a canceled partial download.
+        download?.cancel { _ in
+            if let temporary { try? FileManager.default.removeItem(at: temporary) }
         }
     }
 
@@ -311,104 +345,10 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         }
     }
 
-    private func performDirectDownload(from url: URL, destinationURL: URL) {
-        let hud = showDownloadHUD()
-        hud.startDownload(filename: destinationURL.lastPathComponent)
-
-        var request = URLRequest(url: url)
-        request.setValue("https://www.tiktok.com/", forHTTPHeaderField: "Referer")
-        request.setValue(webView.customUserAgent, forHTTPHeaderField: "User-Agent")
-
-        let task = customDownloadSession.downloadTask(with: request)
-        downloadTaskDestinations[task] = destinationURL
-        task.resume()
-    }
-
-    // MARK: - URLSessionDownloadDelegate (Real-time Progress)
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        let fraction = totalBytesExpectedToWrite > 0 ? Double(totalBytesWritten) / Double(totalBytesExpectedToWrite) : 0.0
-        DispatchQueue.main.async {
-            self.downloadHUD?.updateProgress(fraction: fraction, writtenBytes: totalBytesWritten, totalBytes: totalBytesExpectedToWrite)
-        }
-    }
-
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        guard let destinationURL = downloadTaskDestinations[downloadTask] else { return }
-        downloadTaskDestinations.removeValue(forKey: downloadTask)
-
-        do {
-            try? FileManager.default.removeItem(at: destinationURL)
-            try FileManager.default.moveItem(at: location, to: destinationURL)
-            DispatchQueue.main.async {
-                NSSound(named: "Glass")?.play()
-                self.downloadHUD?.finishDownload(fileURL: destinationURL)
-            }
-        } catch {
-            DispatchQueue.main.async {
-                self.downloadHUD?.showError(message: error.localizedDescription)
-            }
-        }
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if let error = error {
-            DispatchQueue.main.async {
-                self.downloadHUD?.showError(message: error.localizedDescription)
-            }
-        }
-    }
-
-    private func saveBase64VideoToFile(base64: String, destinationURL: URL) {
-        var cleanBase64 = base64
-        if let commaIndex = cleanBase64.firstIndex(of: ",") {
-            cleanBase64 = String(cleanBase64[cleanBase64.index(after: commaIndex)...])
-        }
-
-        guard let data = Data(base64Encoded: cleanBase64) else {
-            downloadHUD?.showError(message: "未能解码视频二进制数据")
-            return
-        }
-
-        do {
-            try? FileManager.default.removeItem(at: destinationURL)
-            try data.write(to: destinationURL)
-            DispatchQueue.main.async {
-                NSSound(named: "Glass")?.play()
-                self.downloadHUD?.finishDownload(fileURL: destinationURL)
-            }
-        } catch {
-            DispatchQueue.main.async {
-                self.downloadHUD?.showError(message: error.localizedDescription)
-            }
-        }
-    }
-
     private func showNotification(title: String, body: String) {
-        let hud = showDownloadHUD()
-        hud.showToast(title: title, subtitle: body)
-    }
-
-    // MARK: - WKScriptMessageHandler
-    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == "tokmac", let body = message.body as? [String: Any] else { return }
-
-        if let type = body["type"] as? String {
-            switch type {
-            case "detailViewChanged":
-                let isOpen = body["isOpen"] as? Bool ?? false
-                delegate?.webViewController(self, didChangeDetailState: isOpen)
-
-            case "saveBase64Video":
-                if let base64 = body["base64"] as? String {
-                    let destination = self.pendingBlobDestinationURL ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!.appendingPathComponent("TikTok_video.mp4")
-                    self.pendingBlobDestinationURL = nil
-                    saveBase64VideoToFile(base64: base64, destinationURL: destination)
-                }
-
-            default:
-                break
-            }
-        }
+        // A toast must not replace the active download's progress/cancel controls.
+        guard downloadID == nil else { return }
+        showDownloadHUD().showToast(title: title, subtitle: body)
     }
 
     // MARK: - WKNavigationDelegate (Downloads & Navigation)
@@ -435,28 +375,80 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
-        download.delegate = self
+        acceptPageDownload(download)
     }
 
     func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
-        download.delegate = self
+        acceptPageDownload(download)
+    }
+
+    private func acceptPageDownload(_ download: WKDownload) {
+        guard downloadID == nil, DownloadFile.isTrustedPage(webView.url) else {
+            download.cancel { _ in }
+            return
+        }
+        downloadID = UUID()
+        attach(download)
     }
 
     // MARK: - WKDownloadDelegate
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
-        promptUserForSaveDestination(suggestedFilename: suggestedFilename) { selectedURL in
-            completionHandler(selectedURL)
+        guard activeDownload === download else { completionHandler(nil); return }
+        do { try DownloadFile.validateResponse(response) } catch {
+            completionHandler(nil)
+            failDownload(error.localizedDescription)
+            return
+        }
+        let id = downloadID
+        let begin: (URL?) -> Void = { [weak self] selectedURL in
+            guard let self, self.downloadID == id, self.activeDownload === download else {
+                completionHandler(nil)
+                return
+            }
+            guard let selectedURL else { completionHandler(nil); self.resetDownload(); return }
+            self.destinationURL = selectedURL
+            let temporary = DownloadFile.temporaryURL(for: selectedURL)
+            self.temporaryURL = temporary
+            let hud = self.showDownloadHUD()
+            if response.expectedContentLength > 0 {
+                hud.startDownload(filename: selectedURL.lastPathComponent)
+            } else {
+                hud.setIndeterminate(title: "正在下载视频...", subtitle: selectedURL.lastPathComponent)
+            }
+            self.downloadHUD?.onCancel = { [weak self] in self?.cancelDownload() }
+            completionHandler(temporary)
+        }
+        if let destinationURL { begin(destinationURL) } else {
+            promptUserForSaveDestination(suggestedFilename: suggestedFilename, completion: begin)
         }
     }
 
     func downloadDidFinish(_ download: WKDownload) {
-        NSSound(named: "Glass")?.play()
-        let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
-        downloadHUD?.finishDownload(fileURL: downloadsDir)
+        guard activeDownload === download, let temporaryURL, let destinationURL else { return }
+        let id = downloadID
+        isCommittingDownload = true
+        progressObservation = nil
+        downloadHUD?.onCancel = nil
+        // File replacement may touch external volumes; keep it off the UI thread.
+        DispatchQueue.global(qos: .utility).async {
+            let result = Result { try DownloadFile.commit(temporaryURL, to: destinationURL) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.downloadID == id else { return }
+                self.resetDownload()
+                switch result {
+                case .success:
+                    NSSound(named: "Glass")?.play()
+                    self.showDownloadHUD().finishDownload(fileURL: destinationURL)
+                case .failure(let error):
+                    self.showDownloadHUD().showError(message: error.localizedDescription)
+                }
+            }
+        }
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
-        downloadHUD?.showError(message: error.localizedDescription)
+        guard activeDownload === download else { return }
+        failDownload(error.localizedDescription)
     }
 
     // MARK: - WKUIDelegate (OAuth Popup Support)

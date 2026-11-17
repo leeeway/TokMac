@@ -1,0 +1,24 @@
+# Xcode & Swift Package Manager
+.DS_Store
+/.build
+/Packages
+xcuserdata/
+*.xcodeproj
+*.xcworkspace
+DerivedData/
+
+# Output
+/build/*.app
+/build/*.dmg
+/build/*.zip
+/build/dmg_staging/
+/build_win/
+/build_installer/
+/windows/bin/
+/windows/obj/
+/tests/windows/bin/
+/tests/windows/obj/
+
+# Secrets / local
+.env
+*.local

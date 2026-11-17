@@ -1,6 +1,7 @@
 import Cocoa
 
 final class DownloadHUDView: NSVisualEffectView {
+    var onCancel: (() -> Void)?
     private let iconView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
@@ -84,7 +85,7 @@ final class DownloadHUDView: NSVisualEffectView {
         closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close")
         closeButton.contentTintColor = NSColor.white.withAlphaComponent(0.5)
         closeButton.target = self
-        closeButton.action = #selector(dismissAnimated)
+        closeButton.action = #selector(closeDownload)
         addSubview(closeButton)
 
         NSLayoutConstraint.activate([
@@ -159,11 +160,14 @@ final class DownloadHUDView: NSVisualEffectView {
     }
 
     func setIndeterminate(title: String, subtitle: String) {
+        autoDismissWorkItem?.cancel()
+        targetFileURL = nil
         iconView.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: "Downloading")
         iconView.contentTintColor = .systemBlue
 
         titleLabel.stringValue = title
         subtitleLabel.stringValue = subtitle
+        subtitleLabel.isHidden = false
 
         progressBar.isHidden = false
         progressBar.isIndeterminate = true
@@ -207,6 +211,7 @@ final class DownloadHUDView: NSVisualEffectView {
     }
 
     func finishDownload(fileURL: URL) {
+        autoDismissWorkItem?.cancel()
         targetFileURL = fileURL
         progressBar.stopAnimation(nil)
         progressBar.isHidden = true
@@ -227,6 +232,7 @@ final class DownloadHUDView: NSVisualEffectView {
     }
 
     func showError(message: String) {
+        autoDismissWorkItem?.cancel()
         progressBar.stopAnimation(nil)
         progressBar.isHidden = true
 
@@ -235,7 +241,9 @@ final class DownloadHUDView: NSVisualEffectView {
 
         titleLabel.stringValue = "下载失败"
         subtitleLabel.stringValue = message
+        subtitleLabel.isHidden = false
         revealButton.isHidden = true
+        alphaValue = 1.0
 
         let workItem = DispatchWorkItem { [weak self] in
             self?.dismissAnimated()
@@ -247,6 +255,11 @@ final class DownloadHUDView: NSVisualEffectView {
     @objc func revealInFinder() {
         guard let url = targetFileURL else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
+        dismissAnimated()
+    }
+
+    @objc private func closeDownload() {
+        onCancel?()
         dismissAnimated()
     }
 

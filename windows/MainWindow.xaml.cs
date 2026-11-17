@@ -24,7 +24,20 @@ namespace TokMac
 
         private bool isCompactMode = false;
         private string? currentDownloadedFilePath;
-        private string? pendingBlobDestinationPath;
+        private Guid? activeDownloadID;
+        private BlobRequest? pendingBlob;
+        private bool isCommittingDownload;
+
+        private sealed class BlobRequest
+        {
+            public required string Url { get; init; }
+            public required string TemporaryPath { get; init; }
+            public CoreWebView2DownloadOperation? Operation { get; set; }
+            public TaskCompletionSource<bool> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            public TaskCompletionSource<bool> Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            public EventHandler<object>? ProgressHandler { get; set; }
+            public EventHandler<object>? StateHandler { get; set; }
+        }
         private DispatcherTimer? autoDismissTimer;
         private CancellationTokenSource? downloadCts;
 
@@ -33,6 +46,13 @@ namespace TokMac
             InitializeComponent();
             Loaded += MainWindow_Loaded;
             KeyDown += MainWindow_KeyDown;
+            Closed += (_, _) =>
+            {
+                downloadCts?.Cancel();
+                pendingBlob?.Operation?.Cancel();
+                autoDismissTimer?.Stop();
+                webView.Dispose();
+            };
         }
 
         private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -68,120 +88,20 @@ namespace TokMac
                 webView.CoreWebView2.Settings.UserAgent =
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0";
 
-                // Clean Mode CSS injection
-                await webView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(@"
-                    (function() {
-                        const style = document.createElement('style');
-                        style.textContent = `
-                            /* Hide distracting app promotion prompts */
-                            div[class*='DivBannerContainer'],
-                            div[class*='DivDownloadLinkContainer'],
-                            div[class*='DivMobileAppWrapper'],
-                            div[class*='DivGetAppContainer'],
-                            div[class*='DivDesktopDownloadPrompt'],
-                            div[id*='get-app'],
-                            div[class*='DivAppBannerContainer'],
-                            div[class*='DivTopNavDownloadLink'] {
-                                display: none !important;
-                            }
-                        `;
-                        document.head.appendChild(style);
-
-                        // Unlock right click
-                        window.addEventListener('contextmenu', function(e) {
-                            e.stopImmediatePropagation();
-                        }, true);
-
-                        // Video Finder & Extractor
-                        window.tokmacGetVideoDownloadInfo = function() {
-                            const videos = Array.from(document.querySelectorAll('video'));
-                            if (!videos.length) return null;
-                            const centerY = window.innerHeight / 2;
-                            let bestVideo = videos[0];
-                            let minDistance = 999999;
-                            for (const v of videos) {
-                                const rect = v.getBoundingClientRect();
-                                const dist = Math.abs((rect.top + rect.bottom) / 2 - centerY);
-                                if (dist < minDistance) {
-                                    minDistance = dist;
-                                    bestVideo = v;
-                                }
-                            }
-
-                            let downloadUrl = null;
-                            let src = bestVideo.currentSrc || bestVideo.src;
-                            if (src && src.startsWith('http')) downloadUrl = src;
-
-                            if (!downloadUrl) {
-                                const sources = bestVideo.querySelectorAll('source');
-                                for (const s of sources) {
-                                    if (s.src && s.src.startsWith('http')) {
-                                        downloadUrl = s.src;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            if (!downloadUrl) {
-                                try {
-                                    const uData = window.__UNIVERSAL_DATA_FOR_REHYDRATION__;
-                                    if (uData) {
-                                        function search(obj) {
-                                            if (!obj || downloadUrl) return;
-                                            if (typeof obj === 'object') {
-                                                if (obj.downloadAddr) downloadUrl = obj.downloadAddr;
-                                                else if (obj.playAddr) downloadUrl = obj.playAddr;
-                                                if (!downloadUrl) {
-                                                    for (const k in obj) search(obj[k]);
-                                                }
-                                            }
-                                        }
-                                        search(uData);
-                                    }
-                                } catch(e) {}
-                            }
-
-                            if (!downloadUrl && src && src.startsWith('blob:')) {
-                                downloadUrl = src;
-                            }
-
-                            const authorEl = document.querySelector('h3[data-e2e=""browse-user-title""]') ||
-                                             document.querySelector('span[data-e2e=""browse-user-title""]') ||
-                                             document.querySelector('span[data-e2e=""user-title""]') ||
-                                             document.querySelector('a[data-e2e=""video-author-uniqueid""]');
-                            const author = authorEl ? authorEl.innerText.trim() : 'TikTok';
-
-                            return {
-                                url: downloadUrl,
-                                author: author,
-                                isBlob: downloadUrl ? downloadUrl.startsWith('blob:') : false
-                            };
-                        };
-
-                        window.tokmacDownloadBlob = function(blobUrl) {
-                            fetch(blobUrl)
-                                .then(r => r.blob())
-                                .then(blob => {
-                                    const reader = new FileReader();
-                                    reader.onloadend = function() {
-                                        window.chrome.webview.postMessage({
-                                            type: 'saveBase64Video',
-                                            base64: reader.result
-                                        });
-                                    };
-                                    reader.readAsDataURL(blob);
-                                })
-                                .catch(err => {
-                                    window.chrome.webview.postMessage({
-                                        type: 'blobError',
-                                        error: err.message
-                                    });
-                                });
-                        };
-                    })();
-                ");
-
-                webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+                // The same script is embedded by both native clients.
+                using var scriptStream = typeof(MainWindow).Assembly.GetManifestResourceStream("TokMac.tokmac.js")
+                    ?? throw new InvalidOperationException("Missing bundled tokmac.js");
+                using var scriptReader = new StreamReader(scriptStream);
+                await webView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(await scriptReader.ReadToEndAsync());
+                // No JavaScript message handler exposes local file writes.
+                webView.CoreWebView2.Settings.IsWebMessageEnabled = false;
+                webView.CoreWebView2.DownloadStarting += CoreWebView2_DownloadStarting;
+                webView.CoreWebView2.ContextMenuRequested += (_, args) =>
+                {
+                    var item = environment.CreateContextMenuItem("下载当前视频 (Ctrl+S)", null, CoreWebView2ContextMenuItemKind.Command);
+                    item.CustomItemSelected += async (_, _) => await TriggerVideoDownloadAsync();
+                    args.MenuItems.Insert(0, item);
+                };
                 webView.CoreWebView2.Navigate("https://www.tiktok.com/");
             }
             catch (Exception ex)
@@ -190,34 +110,43 @@ namespace TokMac
             }
         }
 
-        private async void CoreWebView2_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+        private void CoreWebView2_DownloadStarting(object? sender, CoreWebView2DownloadStartingEventArgs e)
         {
-            try
+            var request = pendingBlob;
+            var operation = e.DownloadOperation;
+            // Only the exact Blob selected by the user may use the pre-approved destination.
+            if (request == null || request.Operation != null || operation.Uri != request.Url ||
+                !DownloadFile.IsTrustedPage(webView.Source) || downloadCts?.IsCancellationRequested != false)
             {
-                using var doc = JsonDocument.Parse(e.WebMessageAsJson);
-                var root = doc.RootElement;
-                if (root.TryGetProperty("type", out var typeProp))
-                {
-                    string type = typeProp.GetString() ?? "";
-                    if (type == "saveBase64Video" && root.TryGetProperty("base64", out var base64Prop))
-                    {
-                        string base64 = base64Prop.GetString() ?? "";
-                        if (!string.IsNullOrEmpty(pendingBlobDestinationPath))
-                        {
-                            await SaveBase64ToFileAsync(base64, pendingBlobDestinationPath);
-                            pendingBlobDestinationPath = null;
-                        }
-                    }
-                    else if (type == "blobError" && root.TryGetProperty("error", out var errProp))
-                    {
-                        ShowHUDError("提取视频流失败: " + errProp.GetString());
-                    }
-                }
+                e.Cancel = true;
+                e.Handled = true;
+                return;
             }
-            catch (Exception ex)
+            if (!DownloadFile.IsVideoMime(operation.MimeType, allowEmpty: true))
             {
-                ShowHUDError("解析视频数据失败: " + ex.Message);
+                e.Cancel = true;
+                e.Handled = true;
+                request.Started.TrySetException(new IOException("视频流返回了不支持的内容类型"));
+                return;
             }
+            request.Operation = operation;
+            e.Handled = true;
+            e.ResultFilePath = request.TemporaryPath;
+            request.ProgressHandler = (_, _) =>
+            {
+                if (pendingBlob != request || downloadCts?.IsCancellationRequested != false) return;
+                long total = (long)Math.Min(operation.TotalBytesToReceive ?? 0, (ulong)long.MaxValue);
+                if (total > 0) UpdateHUDProgress((double)operation.BytesReceived / total, operation.BytesReceived, total);
+            };
+            request.StateHandler = (_, _) =>
+            {
+                if (operation.State == CoreWebView2DownloadState.Completed) request.Completed.TrySetResult(true);
+                else if (operation.State == CoreWebView2DownloadState.Interrupted)
+                    request.Completed.TrySetException(new IOException("视频流下载中断: " + operation.InterruptReason));
+            };
+            operation.BytesReceivedChanged += request.ProgressHandler;
+            operation.StateChanged += request.StateHandler;
+            request.Started.TrySetResult(true);
         }
 
         // MARK: - Actions
@@ -228,133 +157,128 @@ namespace TokMac
 
         private async Task TriggerVideoDownloadAsync()
         {
-            if (webView.CoreWebView2 == null) return;
-
+            if (webView.CoreWebView2 == null || activeDownloadID != null || !DownloadFile.IsTrustedPage(webView.Source)) return;
+            var id = Guid.NewGuid();
+            activeDownloadID = id;
+            using var cts = new CancellationTokenSource();
+            downloadCts = cts;
+            btnDownload.IsEnabled = false;
             try
             {
-                string jsonResult = await webView.CoreWebView2.ExecuteScriptAsync("window.tokmacGetVideoDownloadInfo && window.tokmacGetVideoDownloadInfo();");
-                if (string.IsNullOrEmpty(jsonResult) || jsonResult == "null")
-                {
-                    ShowHUDError("未检测到当前播放的视频，请等待加载后重试");
-                    return;
-                }
-
-                using var doc = JsonDocument.Parse(jsonResult);
+                var page = webView.Source;
+                string json = await webView.CoreWebView2.ExecuteScriptAsync("window.tokmacGetVideoDownloadInfo && window.tokmacGetVideoDownloadInfo();");
+                using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
-                string? url = root.TryGetProperty("url", out var urlProp) ? urlProp.GetString() : null;
-                string author = root.TryGetProperty("author", out var authProp) ? (authProp.GetString() ?? "TikTok") : "TikTok";
-                bool isBlob = root.TryGetProperty("isBlob", out var blobProp) && blobProp.GetBoolean();
-
-                if (string.IsNullOrEmpty(url))
-                {
-                    ShowHUDError("未找到视频源地址，请开始播放后重试");
-                    return;
-                }
-
-                // Clean author name for filesystem
-                foreach (char c in Path.GetInvalidFileNameChars())
-                {
-                    author = author.Replace(c, '_');
-                }
-
-                long timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                string suggestedFilename = $"{author}_{timestamp}.mp4";
-
-                var saveDialog = new SaveFileDialog
+                if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("url", out var value) ||
+                    !Uri.TryCreate(value.GetString(), UriKind.Absolute, out var url) || !DownloadFile.IsVideoSource(url, page))
+                    throw new IOException("未检测到当前视频，请等待视频加载后重试");
+                string author = root.TryGetProperty("author", out var auth) ? auth.GetString() ?? "TikTok" : "TikTok";
+                foreach (char c in Path.GetInvalidFileNameChars()) author = author.Replace(c, '_');
+                var dialog = new SaveFileDialog
                 {
                     Title = "选择保存视频的位置",
                     Filter = "MP4 视频 (*.mp4)|*.mp4|所有文件 (*.*)|*.*",
-                    FileName = suggestedFilename,
+                    FileName = $"{author}_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}.mp4",
                     InitialDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads")
                 };
-
-                if (saveDialog.ShowDialog(this) == true)
-                {
-                    string savePath = saveDialog.FileName;
-
-                    if (isBlob)
-                    {
-                        pendingBlobDestinationPath = savePath;
-                        ShowHUDIndeterminate("正在提取视频流...", Path.GetFileName(savePath));
-                        await webView.CoreWebView2.ExecuteScriptAsync($"window.tokmacDownloadBlob && window.tokmacDownloadBlob('{url}');");
-                    }
-                    else
-                    {
-                        await PerformDirectDownloadAsync(url, savePath);
-                    }
-                }
+                if (dialog.ShowDialog(this) != true) return;
+                cts.Token.ThrowIfCancellationRequested();
+                if (webView.Source != page) throw new IOException("页面已切换，请重新选择视频");
+                if (url.Scheme == "blob") await PerformBlobDownloadAsync(url.AbsoluteUri, dialog.FileName, cts.Token);
+                else await PerformDirectDownloadAsync(url.AbsoluteUri, dialog.FileName, cts.Token);
+                FinishHUD(dialog.FileName);
             }
-            catch (Exception ex)
+            catch (OperationCanceledException) { HideHUD(); }
+            catch (Exception) when (cts.IsCancellationRequested) { HideHUD(); }
+            catch (Exception ex) { ShowHUDError("下载失败: " + ex.Message); }
+            finally
             {
-                ShowHUDError("下载出现错误: " + ex.Message);
+                if (activeDownloadID == id)
+                {
+                    activeDownloadID = null;
+                    downloadCts = null;
+                    isCommittingDownload = false;
+                    btnDownload.IsEnabled = true;
+                }
             }
         }
 
-        private async Task PerformDirectDownloadAsync(string url, string destinationPath)
+        private async Task CommitDownloadAsync(string temporary, string destination, CancellationToken token)
         {
-            downloadCts?.Cancel();
-            downloadCts = new CancellationTokenSource();
-            var token = downloadCts.Token;
+            token.ThrowIfCancellationRequested();
+            isCommittingDownload = true;
+            await Task.Run(() => DownloadFile.Commit(temporary, destination));
+        }
 
-            ShowHUDStart(Path.GetFileName(destinationPath));
-
+        private async Task PerformDirectDownloadAsync(string url, string destination, CancellationToken token)
+        {
+            string temporary = DownloadFile.TemporaryPath(destination);
+            ShowHUDStart(Path.GetFileName(destination));
             try
             {
                 using var client = new HttpClient();
                 client.DefaultRequestHeaders.Add("Referer", "https://www.tiktok.com/");
                 client.DefaultRequestHeaders.Add("User-Agent", webView.CoreWebView2.Settings.UserAgent);
-
+                var cookies = await webView.CoreWebView2.CookieManager.GetCookiesAsync(url);
+                if (cookies.Count > 0)
+                    client.DefaultRequestHeaders.Add("Cookie", string.Join("; ", System.Linq.Enumerable.Select(cookies, c => c.Name + "=" + c.Value)));
                 using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, token);
                 response.EnsureSuccessStatusCode();
-
-                long? totalBytes = response.Content.Headers.ContentLength;
-                using var contentStream = await response.Content.ReadAsStreamAsync(token);
-                using var fileStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
-
-                var buffer = new byte[8192];
-                long totalRead = 0;
-                int bytesRead;
-
-                while ((bytesRead = await contentStream.ReadAsync(buffer, 0, buffer.Length, token)) > 0)
+                if (!DownloadFile.IsVideoMime(response.Content.Headers.ContentType?.MediaType))
+                    throw new IOException("服务器返回的内容不是视频");
+                long total = response.Content.Headers.ContentLength ?? 0;
+                await using (var input = await response.Content.ReadAsStreamAsync(token))
+                await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true))
                 {
-                    await fileStream.WriteAsync(buffer, 0, bytesRead, token);
-                    totalRead += bytesRead;
-
-                    if (totalBytes.HasValue && totalBytes.Value > 0)
+                    var buffer = new byte[65536];
+                    long written = 0;
+                    var lastUpdate = Stopwatch.StartNew();
+                    int count;
+                    while ((count = await input.ReadAsync(buffer.AsMemory(), token)) > 0)
                     {
-                        double progress = (double)totalRead / totalBytes.Value;
-                        UpdateHUDProgress(progress, totalRead, totalBytes.Value);
+                        await output.WriteAsync(buffer.AsMemory(0, count), token);
+                        written += count;
+                        if (total > 0 && (lastUpdate.ElapsedMilliseconds >= 100 || written == total))
+                        {
+                            UpdateHUDProgress((double)written / total, written, total);
+                            lastUpdate.Restart();
+                        }
                     }
+                    if (total > 0 && written != total) throw new IOException("视频下载不完整");
+                    await output.FlushAsync(token);
                 }
-
-                FinishHUD(destinationPath);
+                await CommitDownloadAsync(temporary, destination, token);
             }
-            catch (OperationCanceledException)
-            {
-                HideHUD();
-            }
-            catch (Exception ex)
-            {
-                ShowHUDError("下载失败: " + ex.Message);
-            }
+            finally { DownloadFile.Cleanup(temporary); }
         }
 
-        private async Task SaveBase64ToFileAsync(string base64, string destinationPath)
+        private async Task PerformBlobDownloadAsync(string url, string destination, CancellationToken token)
         {
+            var request = new BlobRequest { Url = url, TemporaryPath = DownloadFile.TemporaryPath(destination) };
+            pendingBlob = request;
+            ShowHUDIndeterminate("正在提取视频流...", Path.GetFileName(destination));
             try
             {
-                if (base64.Contains(","))
-                {
-                    base64 = base64.Substring(base64.IndexOf(",") + 1);
-                }
-
-                byte[] bytes = Convert.FromBase64String(base64);
-                await File.WriteAllBytesAsync(destinationPath, bytes);
-                FinishHUD(destinationPath);
+                // JSON encoding also handles apostrophes, backslashes, and line breaks.
+                await webView.CoreWebView2.ExecuteScriptAsync($"window.tokmacDownloadBlob({JsonSerializer.Serialize(url)});");
+                await request.Started.Task.WaitAsync(TimeSpan.FromSeconds(15), token);
+                await request.Completed.Task.WaitAsync(token);
+                await CommitDownloadAsync(request.TemporaryPath, destination, token);
             }
-            catch (Exception ex)
+            finally
             {
-                ShowHUDError("写入文件失败: " + ex.Message);
+                if (request.Operation is { } operation)
+                {
+                    if (operation.State == CoreWebView2DownloadState.InProgress)
+                    {
+                        operation.Cancel();
+                        try { await request.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
+                    }
+                    operation.BytesReceivedChanged -= request.ProgressHandler;
+                    operation.StateChanged -= request.StateHandler;
+                }
+                if (pendingBlob == request) pendingBlob = null;
+                DownloadFile.Cleanup(request.TemporaryPath);
             }
         }
 
@@ -373,12 +297,16 @@ namespace TokMac
             hudRevealBtn.Visibility = Visibility.Collapsed;
 
             downloadHUD.Visibility = Visibility.Visible;
-            taskbarInfo.ProgressState = TaskbarItemProgressState.Normal;
+            taskbarInfo.ProgressState = TaskbarItemProgressState.Indeterminate;
             taskbarInfo.ProgressValue = 0;
+            hudProgressBar.IsIndeterminate = true;
         }
 
         private void UpdateHUDProgress(double fraction, long writtenBytes, long totalBytes)
         {
+            fraction = Math.Clamp(fraction, 0, 1);
+            hudProgressBar.IsIndeterminate = false;
+            taskbarInfo.ProgressState = TaskbarItemProgressState.Normal;
             int percent = (int)(fraction * 100);
             hudTitle.Text = $"正在下载视频 ({percent}%)";
             hudSubtitle.Text = $"{FormatBytes(writtenBytes)} / {FormatBytes(totalBytes)}";
@@ -390,6 +318,7 @@ namespace TokMac
         private void ShowHUDIndeterminate(string title, string subtitle)
         {
             autoDismissTimer?.Stop();
+            currentDownloadedFilePath = null;
             hudIcon.Text = "⬇️";
             hudTitle.Text = title;
             hudSubtitle.Text = subtitle;
@@ -457,7 +386,11 @@ namespace TokMac
 
         private void HudCloseBtn_Click(object sender, RoutedEventArgs e)
         {
-            downloadCts?.Cancel();
+            if (!isCommittingDownload)
+            {
+                downloadCts?.Cancel();
+                pendingBlob?.Operation?.Cancel();
+            }
             HideHUD();
         }
 

@@ -12,7 +12,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "TokMac",
-            path: "Sources/TokMac"
-        )
+            dependencies: ["TokMacCore"],
+            path: "Sources/TokMac",
+            resources: [.process("Scripts")]
+        ),
+        .target(name: "TokMacCore")
     ]
 )

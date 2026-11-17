@@ -1,6 +1,10 @@
 ; Inno Setup Script for TokMac (Windows)
 #define MyAppName "TokMac"
-#define MyAppVersion "1.0.0"
+#ifndef MyAppVersion
+  #define VersionFile FileOpen(AddBackslash(SourcePath) + "..\VERSION")
+  #define MyAppVersion Trim(FileRead(VersionFile))
+  #expr FileClose(VersionFile)
+#endif
 #define MyAppPublisher "leeeway"
 #define MyAppURL "https://github.com/leeeway/TokMac"
 #define MyAppExeName "TokMac.exe"
