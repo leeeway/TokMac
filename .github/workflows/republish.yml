@@ -12,6 +12,11 @@ on:
         required: true
         default: 'v1.0.0'
         type: string
+      allow_unnotarized:
+        description: 'Explicitly publish an ad-hoc macOS build and add a notarization notice'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -28,6 +33,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_RUN_ID: ${{ inputs.build_run_id }}
       RELEASE_TAG: ${{ inputs.tag_name }}
+      ALLOW_UNNOTARIZED: ${{ inputs.allow_unnotarized }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,8 +52,24 @@ jobs:
         run: |
           gh run download "$BUILD_RUN_ID" --name macos-dmg --dir release_assets
           gh run download "$BUILD_RUN_ID" --name windows-binaries --dir release_assets
-      - name: Verify notarized distribution packages
-        run: python3 scripts/verify-release.py release_assets "${RELEASE_TAG#v}"
+      - name: Verify release packages and explicit signing policy
+        run: |
+          args=(release_assets "${RELEASE_TAG#v}")
+          if [[ "$ALLOW_UNNOTARIZED" == true ]]; then args+=(--allow-unnotarized); fi
+          python3 scripts/verify-release.py "${args[@]}"
+      - name: Mark explicitly authorized unnotarized release
+        if: inputs.allow_unnotarized
+        run: |
+          gh release view "$RELEASE_TAG" --json body --jq .body > release-notes.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          notes = Path('release-notes.txt')
+          notice = '> macOS 提示：本次安装包使用 ad-hoc 开发签名，尚未经过 Apple 公证；首次启动可能被 Gatekeeper 阻止。\n\n'
+          body = notes.read_text()
+          if not body.startswith(notice):
+              notes.write_text(notice + body)
+          PY
+          gh release edit "$RELEASE_TAG" --notes-file release-notes.txt
       - name: Replace existing release packages
         run: |
           version="${RELEASE_TAG#v}"

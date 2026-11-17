@@ -103,7 +103,7 @@ GitHub Actions 使用以下仓库 Secrets：
 | `APPLE_NOTARY_KEY_ID` | API key ID |
 | `APPLE_NOTARY_ISSUER_ID` | API issuer ID |
 
-标签构建强制使用正式模式；没有配置这些凭据时不会退回 ad-hoc 发布。普通分支默认生成开发产物；设置仓库变量 `MACOS_SIGNING_ENABLED=true` 可让分支构建也执行完整公证。PR 不导入签名凭据。CI 仅在临时钥匙串中导入证书，结束时删除钥匙串和 API key 文件。自动发布和手动重发都会校验公证状态及 DMG 校验和。
+标签构建强制使用正式模式；没有配置这些凭据时不会退回 ad-hoc 发布。普通分支默认生成开发产物；设置仓库变量 `MACOS_SIGNING_ENABLED=true` 可让分支构建也执行完整公证。PR 不导入签名凭据。CI 仅在临时钥匙串中导入证书，结束时删除钥匙串和 API key 文件。自动发布和手动重发默认都会校验公证状态及 DMG 校验和。只有在明确决定发布开发签名包时，才可在手动重发工作流中勾选 `allow_unnotarized`；这仍会校验版本、构建来源和文件校验和，并自动在发布说明中标注未经过 Apple 公证。自动发布不使用此选项。
 
 Apple 流程参考：[Developer ID](https://developer.apple.com/developer-id/)、[公证文档](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)。
 

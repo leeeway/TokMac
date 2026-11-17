@@ -39,6 +39,24 @@ class ReleaseValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             module.verify(self.directory, '1.0.0')
 
+    def test_explicit_manual_opt_in_accepts_development_artifact(self):
+        self.status.update(signing_mode='development', notarized=False)
+        self.save()
+        module.verify(self.directory, '1.0.0', allow_unnotarized=True)
+
+    def test_manual_opt_in_still_rejects_modified_dmg(self):
+        self.status.update(signing_mode='development', notarized=False)
+        self.save()
+        (self.directory / 'TokMac-1.0.0.dmg').write_bytes(b'changed')
+        with self.assertRaises(ValueError):
+            module.verify(self.directory, '1.0.0', allow_unnotarized=True)
+
+    def test_manual_opt_in_cannot_accept_incomplete_distribution_signing(self):
+        self.status.update(signing_mode='distribution', notarized=False)
+        self.save()
+        with self.assertRaises(ValueError):
+            module.verify(self.directory, '1.0.0', allow_unnotarized=True)
+
     def test_version_mismatch_is_rejected(self):
         with self.assertRaises(ValueError):
             module.verify(self.directory, '1.0.1')
