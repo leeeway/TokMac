@@ -100,7 +100,7 @@ node --test tests/scripts.test.cjs
 dotnet run --project tests/windows/DownloadFileTests.csproj -c Release
 ```
 
-默认版本读取仓库根目录的 `VERSION`。CI 的普通推送和 PR 仅测试、构建并保存产物；推送 `vX.Y.Z` 标签时，所有产物使用标签版本，并创建对应 Release。已有 Release 的附件不会被自动覆盖。
+默认版本读取仓库根目录的 `VERSION`。CI 的普通推送和 PR 仅测试、构建并保存产物；推送 `vX.Y.Z` 标签时，所有产物使用标签版本，并创建对应 Release。已有 Release 的附件不会被自动覆盖。如需同版本重新发布，可手动运行 `Republish Existing Release` 工作流，指定已通过的构建编号；工作流会核对构建提交与现有标签一致，再替换附件。
 
 ---
 

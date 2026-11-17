@@ -1,0 +1,54 @@
+name: Republish Existing Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: 'Successful Build & Release run containing the packages'
+        required: true
+        type: string
+      tag_name:
+        description: 'Existing release tag to replace, without changing its version'
+        required: true
+        default: 'v1.0.0'
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: republish-${{ inputs.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  republish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BUILD_RUN_ID: ${{ inputs.build_run_id }}
+      RELEASE_TAG: ${{ inputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag_name }}
+      - name: Verify build, source, and existing release
+        shell: bash
+        run: |
+          [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$(cat VERSION)" == "${RELEASE_TAG#v}" ]]
+          [[ "$(gh run view "$BUILD_RUN_ID" --json conclusion --jq .conclusion)" == success ]]
+          [[ "$(gh run view "$BUILD_RUN_ID" --json workflowName --jq .workflowName)" == 'Build & Release (macOS & Windows)' ]]
+          [[ "$(gh run view "$BUILD_RUN_ID" --json headSha --jq .headSha)" == "$(git rev-parse HEAD)" ]]
+          gh release view "$RELEASE_TAG" >/dev/null
+      - name: Download verified packages
+        run: |
+          gh run download "$BUILD_RUN_ID" --name macos-dmg --dir release_assets
+          gh run download "$BUILD_RUN_ID" --name windows-binaries --dir release_assets
+      - name: Replace existing release packages
+        run: |
+          version="${RELEASE_TAG#v}"
+          files=("release_assets/TokMac-${version}.dmg" "release_assets/TokMac-Setup-${version}.exe" "release_assets/TokMac-Windows-Portable.zip")
+          for file in "${files[@]}"; do test -s "$file"; done
+          gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
