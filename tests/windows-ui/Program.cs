@@ -1,6 +1,7 @@
 using System;
 using System.Windows;
 using System.Windows.Controls;
+using Microsoft.Web.WebView2.Wpf;
 using TokMac;
 
 internal static class Program
@@ -29,6 +30,14 @@ internal static class Program
             window.ToggleFullScreen();
             window.ToggleFullScreen();
             if (window.WindowState != WindowState.Maximized) throw new Exception("Original maximized state must be restored");
+
+            var host = (Grid)window.FindName("webHost");
+            var oldBrowser = host.Children[0];
+            var overlay = window.FindName("browserStatus");
+            window.ReplaceBrowserControl();
+            if (host.Children[0] is not WebView2CompositionControl || host.Children[0] == oldBrowser ||
+                host.Children.Contains(oldBrowser) || host.Children[^1] != overlay)
+                throw new Exception("Browser recovery must attach a new control below the recovery overlay");
         }
         finally { window.Close(); app.Shutdown(); }
     }

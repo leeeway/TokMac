@@ -11,6 +11,9 @@ final class DownloadHUDView: NSVisualEffectView {
 
     private var targetFileURL: URL?
     private var autoDismissWorkItem: DispatchWorkItem?
+    private var isDismissing = false
+
+    var canReuse: Bool { superview != nil && !isDismissing }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -264,6 +267,8 @@ final class DownloadHUDView: NSVisualEffectView {
     }
 
     @objc func dismissAnimated() {
+        guard !isDismissing else { return }
+        isDismissing = true
         autoDismissWorkItem?.cancel()
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.2

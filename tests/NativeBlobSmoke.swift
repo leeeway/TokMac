@@ -5,6 +5,7 @@ import WebKit
 final class NativeBlobProbe: NSObject, WKNavigationDelegate, WKDownloadDelegate {
     let webView: WKWebView
     var download: WKDownload?
+    let videoBytes = try! Data(contentsOf: URL(fileURLWithPath: "tests/fixtures/tiny.mp4"))
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     lazy var destination = directory.appendingPathComponent("O'Connor.mp4")
     lazy var temporary = DownloadFile.temporaryURL(for: destination)
@@ -30,7 +31,8 @@ final class NativeBlobProbe: NSObject, WKNavigationDelegate, WKDownloadDelegate 
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        webView.evaluateJavaScript("URL.createObjectURL(new Blob(['test video bytes'], {type:'video/mp4'}))") { result, error in
+        let base64 = videoBytes.base64EncodedString()
+        webView.evaluateJavaScript("URL.createObjectURL(new Blob([Uint8Array.from(atob('\(base64)'), c => c.charCodeAt(0))], {type:'video/mp4'}))") { result, error in
             guard let source = result as? String, let url = URL(string: source) else {
                 self.finish(1, message: "Blob creation failed: \(String(describing: error))")
             }
@@ -53,7 +55,7 @@ final class NativeBlobProbe: NSObject, WKNavigationDelegate, WKDownloadDelegate 
                 finish(3, message: "Native download modified the original before commit")
             }
             try DownloadFile.commit(temporary, to: destination)
-            guard try String(contentsOf: destination, encoding: .utf8) == "test video bytes" else {
+            guard try Data(contentsOf: destination) == videoBytes else {
                 finish(4, message: "Native download bytes differ")
             }
             finish(0, message: "Native WebKit Blob streaming and atomic replacement passed.")

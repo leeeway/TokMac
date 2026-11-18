@@ -26,13 +26,21 @@ internal static class DownloadFile
     internal static string TemporaryPath(string destination) =>
         Path.Combine(Path.GetDirectoryName(Path.GetFullPath(destination))!, $".tokmac-{Guid.NewGuid()}.part");
 
-    internal static void Commit(string temporary, string destination)
+    internal static string Commit(string temporary, string destination)
     {
-        if (new FileInfo(temporary).Length == 0) throw new IOException("下载的视频为空");
+        var extension = "." + VideoContainer.GetExtension(temporary);
+        if (!Path.GetExtension(destination).Equals(extension, StringComparison.OrdinalIgnoreCase))
+        {
+            var corrected = Path.ChangeExtension(destination, extension);
+            // An extension correction is not permission to replace another file.
+            File.Move(temporary, corrected);
+            return corrected;
+        }
         // Temporary files live beside their destination, so replacement stays on one volume.
         // Failure leaves the existing destination intact.
         if (File.Exists(destination)) File.Replace(temporary, destination, null);
         else File.Move(temporary, destination);
+        return destination;
     }
 
     internal static void Cleanup(string temporary)

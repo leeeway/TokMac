@@ -17,8 +17,13 @@ public enum DownloadFile {
     }
 
     public static func validateResponse(_ response: URLResponse) throws {
-        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            throw failure("服务器返回 HTTP \(http.statusCode)，未保存视频")
+        if let http = response as? HTTPURLResponse {
+            guard (200...299).contains(http.statusCode) else {
+                throw failure("服务器返回 HTTP \(http.statusCode)，未保存视频")
+            }
+            guard http.statusCode != 206, http.value(forHTTPHeaderField: "Content-Range") == nil else {
+                throw failure("服务器只返回了视频片段，未保存视频")
+            }
         }
         let mime = response.mimeType?.lowercased() ?? ""
         let isBlob = response.url?.scheme == "blob"
@@ -34,14 +39,22 @@ public enum DownloadFile {
 
     /// Both paths are on the same volume. POSIX rename replaces the destination atomically;
     /// a failed rename leaves the existing file intact.
-    public static func commit(_ temporary: URL, to destination: URL) throws {
-        let attributes = try FileManager.default.attributesOfItem(atPath: temporary.path)
-        guard let size = attributes[.size] as? NSNumber, size.int64Value > 0 else {
-            throw failure("下载的视频为空")
+    @discardableResult
+    public static func commit(_ temporary: URL, to destination: URL) throws -> URL {
+        let actualExtension = try VideoContainer.fileExtension(of: temporary)
+        if destination.pathExtension.lowercased() != actualExtension {
+            let corrected = destination.deletingPathExtension().appendingPathExtension(actualExtension)
+            // The save panel authorized only the selected path. A corrected name must not clobber another file.
+            guard renamex_np(temporary.path, corrected.path, UInt32(RENAME_EXCL)) == 0 else {
+                if errno == EEXIST { throw failure("已存在 \(corrected.lastPathComponent)，请重新选择文件名") }
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+            return corrected
         }
         guard rename(temporary.path, destination.path) == 0 else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
+        return destination
     }
 
     private static func failure(_ message: String) -> NSError {

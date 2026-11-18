@@ -145,3 +145,70 @@ test('held playback keys do not repeatedly toggle state', () => {
     f.events.keydown(keyEvent('m', { repeat: true }));
     assert.equal(f.video.muted, true);
 });
+
+test('download and comments target the playing card instead of an edge preview or a different card', () => {
+    const f = fixture({ source: 'https://cdn.example/playing.mp4' });
+    const clicks = [];
+    f.video.paused = false;
+    f.video.closest = () => ({ querySelector: selector => selector.includes('feed-comment')
+        ? { click() { clicks.push('active'); } } : null });
+    const preview = {
+        ...f.video, paused: true, currentSrc: 'https://cdn.example/preview.mp4',
+        getBoundingClientRect: () => ({ top: 300, bottom: 500, left: 999, right: 1100, width: 101, height: 200 }),
+        closest: () => ({ querySelector: selector => selector.includes('feed-comment')
+            ? { click() { clicks.push('preview'); } } : null })
+    };
+    f.videos.unshift(preview);
+    f.document.querySelector = () => ({ click() { clicks.push('global'); } });
+    assert.equal(f.window.tokmacGetVideoDownloadInfo().url, 'https://cdn.example/playing.mp4');
+    f.window.tokmacToggleComments();
+    assert.deepEqual(clicks, ['active']);
+
+    f.video.paused = true;
+    preview.paused = false;
+    assert.equal(f.window.tokmacGetVideoDownloadInfo().url, 'https://cdn.example/playing.mp4');
+});
+
+test('a fully visible playing clip wins over a larger paused clip', () => {
+    const f = fixture({ source: 'https://cdn.example/paused.mp4' });
+    f.video.paused = true;
+    f.videos.push({
+        ...f.video, paused: false, currentSrc: 'https://cdn.example/playing.mp4',
+        getBoundingClientRect: () => ({ top: 100, bottom: 350, left: 600, right: 900, width: 300, height: 250 })
+    });
+    assert.equal(f.window.tokmacGetVideoDownloadInfo().url, 'https://cdn.example/playing.mp4');
+});
+
+test('comments do not fall back to another card when the active card has no button', () => {
+    const f = fixture();
+    f.videos.push({ ...f.video, paused: true });
+    f.document.querySelectorAll = selector => selector === 'video' ? f.videos : [{ click() { assert.fail('wrong card clicked'); } }];
+    f.window.tokmacToggleComments();
+});
+
+test('next and previous video leave photo carousel buttons alone', () => {
+    const f = fixture();
+    f.video.closest = () => null;
+    const actions = [];
+    f.document.querySelector = selector => {
+        if (selector.includes('aria-label*="Next"')) return { click: () => actions.push('photo') };
+        if (selector.includes('feed-arrow-down')) return { click: () => actions.push('next video') };
+        if (selector.includes('feed-arrow-up')) return { click: () => actions.push('previous video') };
+        return null;
+    };
+    f.events.keydown(keyEvent('ArrowDown'));
+    f.events.keydown(keyEvent('ArrowUp'));
+    assert.deepEqual(actions, ['next video', 'previous video']);
+});
+
+test('fallback scrolls the container that owns the active player', () => {
+    const f = fixture();
+    f.video.closest = () => null;
+    const moves = [];
+    f.video.parentElement = { scrollHeight: 1200, clientHeight: 600, scrollBy: ({ top }) => moves.push(top) };
+    f.window.getComputedStyle = () => ({ overflowY: 'auto' });
+    f.window.scrollBy = () => assert.fail('unrelated page scrolled');
+    f.window.tokmacNextVideo();
+    f.window.tokmacPrevVideo();
+    assert.deepEqual(moves, [510, -510]);
+});

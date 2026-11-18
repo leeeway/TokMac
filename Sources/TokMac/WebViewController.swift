@@ -19,6 +19,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     private var temporaryURL: URL?
     private var progressObservation: NSKeyValueObservation?
     private var isCommittingDownload = false
+    private var lastProcessRecovery: TimeInterval?
 
     weak var delegate: WebViewControllerDelegate?
 
@@ -218,7 +219,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
 
     // MARK: - Video Downloading (Direct HTTP & Blob support with HUD & Progress)
     private func showDownloadHUD() -> DownloadHUDView {
-        if let existing = downloadHUD, existing.superview != nil {
+        if let existing = downloadHUD, existing.canReuse {
             return existing
         }
         let hud = DownloadHUDView()
@@ -321,7 +322,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         panel.prompt = "保存"
         panel.nameFieldStringValue = suggestedFilename
         panel.canCreateDirectories = true
-        panel.allowedContentTypes = [.mpeg4Movie, .movie]
+        panel.allowedContentTypes = [.mpeg4Movie, .quickTimeMovie, UTType(filenameExtension: "webm") ?? .movie]
 
         if let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
             panel.directoryURL = downloadsDir
@@ -352,6 +353,23 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     }
 
     // MARK: - WKNavigationDelegate (Downloads & Navigation)
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        guard webView === self.webView else { return }
+        if downloadID != nil && !isCommittingDownload {
+            cancelDownload()
+            showDownloadHUD().showError(message: "网页进程已退出，视频下载已取消")
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        if let previous = lastProcessRecovery, now - previous < 30 {
+            if !isCommittingDownload {
+                showDownloadHUD().showToast(title: "网页进程反复退出", subtitle: "按 Cmd+R 重新加载")
+            }
+            return
+        }
+        lastProcessRecovery = now
+        if webView.reload() == nil { loadTikTok() }
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         updateCompactModeState()
         updateCleanModeState()
@@ -436,9 +454,9 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
                 guard let self, self.downloadID == id else { return }
                 self.resetDownload()
                 switch result {
-                case .success:
+                case .success(let savedURL):
                     NSSound(named: "Glass")?.play()
-                    self.showDownloadHUD().finishDownload(fileURL: destinationURL)
+                    self.showDownloadHUD().finishDownload(fileURL: savedURL)
                 case .failure(let error):
                     self.showDownloadHUD().showError(message: error.localizedDescription)
                 }

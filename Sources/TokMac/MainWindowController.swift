@@ -159,25 +159,31 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     @objc func setPhoneMode() {
         guard let window = window else { return }
         webViewController.isCompactMode = true
-        var frame = window.frame
-        let targetWidth: CGFloat = 520
-        let targetHeight: CGFloat = 840
-        frame.origin.y += (frame.size.height - targetHeight)
-        frame.size = NSSize(width: targetWidth, height: targetHeight)
-        window.setFrame(frame, display: true, animate: true)
+        resize(window, to: NSSize(width: 520, height: 840))
         updateToolbarState()
     }
 
     @objc func setDesktopMode() {
         guard let window = window else { return }
         webViewController.isCompactMode = false
-        var frame = window.frame
-        let targetWidth: CGFloat = 1080
-        let targetHeight: CGFloat = 760
-        frame.origin.y += (frame.size.height - targetHeight)
-        frame.size = NSSize(width: targetWidth, height: targetHeight)
-        window.setFrame(frame, display: true, animate: true)
+        resize(window, to: NSSize(width: 1080, height: 760))
         updateToolbarState()
+    }
+
+    static func layoutFrame(from frame: NSRect, size: NSSize, workArea: NSRect) -> NSRect {
+        let width = min(size.width, workArea.width)
+        let height = min(size.height, workArea.height)
+        let x = min(max(frame.minX, workArea.minX), workArea.maxX - width)
+        let y = min(max(frame.maxY - height, workArea.minY), workArea.maxY - height)
+        return NSRect(x: x, y: y, width: width, height: height)
+    }
+
+    private func resize(_ window: NSWindow, to size: NSSize) {
+        guard let workArea = (window.screen ?? NSScreen.main)?.visibleFrame else {
+            window.setContentSize(size)
+            return
+        }
+        window.setFrame(Self.layoutFrame(from: window.frame, size: size, workArea: workArea), display: true, animate: true)
     }
 
     @objc func reloadPage() {

@@ -11,6 +11,7 @@ using System.Windows.Interop;
 using System.Windows.Shell;
 using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
 using Microsoft.Win32;
 
 namespace TokMac
@@ -32,6 +33,12 @@ namespace TokMac
         private Guid? activeDownloadID;
         private BlobRequest? pendingBlob;
         private bool isCommittingDownload;
+        private CoreWebView2? browser;
+        private Uri? lastTrustedPage;
+        private bool initializingBrowser;
+        private bool closing;
+        private bool recreateBrowser;
+        private DateTimeOffset lastBrowserRecovery;
 
         private sealed class BlobRequest
         {
@@ -53,8 +60,9 @@ namespace TokMac
             PreviewKeyDown += MainWindow_KeyDown;
             Closed += (_, _) =>
             {
+                closing = true;
+                browser = null;
                 downloadCts?.Cancel();
-                pendingBlob?.Operation?.Cancel();
                 autoDismissTimer?.Stop();
                 webView.Dispose();
             };
@@ -79,6 +87,8 @@ namespace TokMac
 
         private async Task InitializeWebView()
         {
+            if (closing || initializingBrowser) return;
+            initializingBrowser = true;
             try
             {
                 string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
@@ -86,32 +96,120 @@ namespace TokMac
                 Directory.CreateDirectory(userDataFolder);
 
                 var environment = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
+                if (closing) return;
                 await webView.EnsureCoreWebView2Async(environment);
+                if (closing) return;
+                var core = webView.CoreWebView2;
 
-                webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
-                webView.CoreWebView2.Settings.AreDevToolsEnabled = true;
-                webView.CoreWebView2.Settings.UserAgent =
+                core.Settings.IsStatusBarEnabled = false;
+                core.Settings.AreDevToolsEnabled = true;
+                core.Settings.UserAgent =
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0";
 
-                // The same script is embedded by both native clients.
                 using var scriptStream = typeof(MainWindow).Assembly.GetManifestResourceStream("TokMac.tokmac.js")
                     ?? throw new InvalidOperationException("Missing bundled tokmac.js");
                 using var scriptReader = new StreamReader(scriptStream);
-                await webView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(await scriptReader.ReadToEndAsync());
-                // No JavaScript message handler exposes local file writes.
-                webView.CoreWebView2.Settings.IsWebMessageEnabled = false;
-                webView.CoreWebView2.DownloadStarting += CoreWebView2_DownloadStarting;
-                webView.CoreWebView2.ContextMenuRequested += (_, args) =>
+                string script = await scriptReader.ReadToEndAsync();
+                if (closing) return;
+                await core.AddScriptToExecuteOnDocumentCreatedAsync(script);
+                if (closing) return;
+                core.Settings.IsWebMessageEnabled = false;
+                core.DownloadStarting += CoreWebView2_DownloadStarting;
+                core.ContextMenuRequested += (_, args) =>
                 {
                     var item = environment.CreateContextMenuItem("下载当前视频 (Ctrl+S)", null, CoreWebView2ContextMenuItemKind.Command);
                     item.CustomItemSelected += async (_, _) => await TriggerVideoDownloadAsync();
                     args.MenuItems.Insert(0, item);
                 };
-                webView.CoreWebView2.Navigate("https://www.tiktok.com/");
+                core.SourceChanged += (_, _) =>
+                {
+                    if (browser == core && Uri.TryCreate(core.Source, UriKind.Absolute, out var page) &&
+                        DownloadFile.IsTrustedPage(page)) lastTrustedPage = page;
+                };
+                core.NavigationCompleted += (_, args) =>
+                {
+                    if (browser != core) return;
+                    if (args.IsSuccess) browserStatus.Visibility = Visibility.Collapsed;
+                    else if (args.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
+                        ShowBrowserError("页面加载失败，请重试。");
+                };
+                core.ProcessFailed += (_, args) =>
+                {
+                    var kind = args.ProcessFailedKind;
+                    // Return to WebView2 before disposing or reloading a control.
+                    Dispatcher.BeginInvoke(new Action(() => BrowserProcessFailed(core, kind)));
+                };
+                browser = core;
+                recreateBrowser = false;
+                core.Navigate(lastTrustedPage?.AbsoluteUri ?? "https://www.tiktok.com/");
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"WebView2 初始化失败: {ex.Message}\n请确保已安装 Microsoft Edge WebView2 运行时。", "TokMac 错误", MessageBoxButton.OK, MessageBoxImage.Error);
+                browser = null;
+                recreateBrowser = true;
+                if (!closing) ShowBrowserError($"浏览器初始化失败，请确认已安装 WebView2 Runtime。\n{ex.Message}");
+            }
+            finally { initializingBrowser = false; }
+        }
+
+        private void ShowBrowserError(string message)
+        {
+            browserStatusText.Text = message;
+            browserStatus.Visibility = Visibility.Visible;
+        }
+
+        private void BrowserProcessFailed(CoreWebView2 source, CoreWebView2ProcessFailedKind kind)
+        {
+            if (closing || browser != source) return;
+            if (kind is not (CoreWebView2ProcessFailedKind.BrowserProcessExited or
+                CoreWebView2ProcessFailedKind.RenderProcessExited)) return;
+
+            if (!isCommittingDownload) downloadCts?.Cancel();
+            if (kind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
+            {
+                recreateBrowser = true;
+                browser = null;
+            }
+            if (DateTimeOffset.UtcNow - lastBrowserRecovery < TimeSpan.FromSeconds(30))
+            {
+                ShowBrowserError("网页进程反复退出，请重新加载。");
+                return;
+            }
+            lastBrowserRecovery = DateTimeOffset.UtcNow;
+            ShowBrowserError("网页进程已退出，正在恢复。");
+            _ = RecoverBrowserAsync();
+        }
+
+        private async Task RecoverBrowserAsync()
+        {
+            if (closing || initializingBrowser) return;
+            if (!recreateBrowser && browser is { } core)
+            {
+                try { core.Reload(); }
+                catch (Exception)
+                {
+                    browser = null;
+                    recreateBrowser = true;
+                    ShowBrowserError("网页无法刷新，请重新加载浏览器。");
+                }
+                return;
+            }
+            ReplaceBrowserControl();
+            await InitializeWebView();
+        }
+
+        internal void ReplaceBrowserControl()
+        {
+            var oldView = webView;
+            var replacement = new WebView2CompositionControl();
+            browser = null;
+            webHost.Children.Remove(oldView);
+            webView = replacement;
+            webHost.Children.Insert(0, replacement);
+            try { oldView.Dispose(); }
+            catch (Exception error) when (error is COMException or InvalidOperationException)
+            {
+                Debug.WriteLine(error); // Native process may already have released the control.
             }
         }
 
@@ -120,7 +218,7 @@ namespace TokMac
             var request = pendingBlob;
             var operation = e.DownloadOperation;
             // Only the exact Blob selected by the user may use the pre-approved destination.
-            if (request == null || request.Operation != null || operation.Uri != request.Url ||
+            if (sender != browser || request == null || request.Operation != null || operation.Uri != request.Url ||
                 !DownloadFile.IsTrustedPage(webView.Source) || downloadCts?.IsCancellationRequested != false)
             {
                 e.Cancel = true;
@@ -162,7 +260,9 @@ namespace TokMac
 
         private async Task TriggerVideoDownloadAsync()
         {
-            if (webView.CoreWebView2 == null || activeDownloadID != null || !DownloadFile.IsTrustedPage(webView.Source)) return;
+            var core = browser;
+            if (core == null || activeDownloadID != null || browserStatus.Visibility == Visibility.Visible ||
+                !DownloadFile.IsTrustedPage(webView.Source)) return;
             var id = Guid.NewGuid();
             activeDownloadID = id;
             using var cts = new CancellationTokenSource();
@@ -171,7 +271,7 @@ namespace TokMac
             try
             {
                 var page = webView.Source;
-                string json = await webView.CoreWebView2.ExecuteScriptAsync("window.tokmacGetVideoDownloadInfo && window.tokmacGetVideoDownloadInfo();");
+                string json = await core.ExecuteScriptAsync("window.tokmacGetVideoDownloadInfo && window.tokmacGetVideoDownloadInfo();").WaitAsync(cts.Token);
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
                 if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("url", out var value) ||
@@ -182,16 +282,17 @@ namespace TokMac
                 var dialog = new SaveFileDialog
                 {
                     Title = "选择保存视频的位置",
-                    Filter = "MP4 视频 (*.mp4)|*.mp4|所有文件 (*.*)|*.*",
+                    Filter = "视频文件 (*.mp4;*.mov;*.webm)|*.mp4;*.mov;*.webm|所有文件 (*.*)|*.*",
                     FileName = $"{author}_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}.mp4",
                     InitialDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads")
                 };
                 if (dialog.ShowDialog(this) != true) return;
                 cts.Token.ThrowIfCancellationRequested();
                 if (webView.Source != page) throw new IOException("页面已切换，请重新选择视频");
-                if (url.Scheme == "blob") await PerformBlobDownloadAsync(url.AbsoluteUri, dialog.FileName, cts.Token);
-                else await PerformDirectDownloadAsync(url.AbsoluteUri, dialog.FileName, cts.Token);
-                FinishHUD(dialog.FileName);
+                var savedPath = url.Scheme == "blob"
+                    ? await PerformBlobDownloadAsync(core, url.AbsoluteUri, dialog.FileName, cts.Token)
+                    : await PerformDirectDownloadAsync(core, url.AbsoluteUri, dialog.FileName, cts.Token);
+                FinishHUD(savedPath);
             }
             catch (OperationCanceledException) { HideHUD(); }
             catch (Exception) when (cts.IsCancellationRequested) { HideHUD(); }
@@ -208,56 +309,49 @@ namespace TokMac
             }
         }
 
-        private async Task CommitDownloadAsync(string temporary, string destination, CancellationToken token)
+        private async Task<string> CommitDownloadAsync(string temporary, string destination, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
             isCommittingDownload = true;
-            await Task.Run(() => DownloadFile.Commit(temporary, destination));
+            return await Task.Run(() => DownloadFile.Commit(temporary, destination));
         }
 
-        private async Task PerformDirectDownloadAsync(string url, string destination, CancellationToken token)
+        private async Task<string> PerformDirectDownloadAsync(CoreWebView2 core, string url, string destination, CancellationToken token)
         {
             string temporary = DownloadFile.TemporaryPath(destination);
             ShowHUDStart(Path.GetFileName(destination));
             try
             {
                 using var client = new DownloadHttpClient();
-                using var response = await client.GetAsync(new Uri(url), webView.CoreWebView2.Settings.UserAgent,
+                using var response = await client.GetAsync(new Uri(url), core.Settings.UserAgent,
                     async target =>
                     {
-                        var cookies = await webView.CoreWebView2.CookieManager.GetCookiesAsync(target.AbsoluteUri);
+                        var cookies = await core.CookieManager.GetCookiesAsync(target.AbsoluteUri).WaitAsync(token);
                         return string.Join("; ", System.Linq.Enumerable.Select(cookies, c => c.Name + "=" + c.Value));
                     }, token);
-                response.EnsureSuccessStatusCode();
-                if (!DownloadFile.IsVideoMime(response.Content.Headers.ContentType?.MediaType))
-                    throw new IOException("服务器返回的内容不是视频");
-                long total = response.Content.Headers.ContentLength ?? 0;
+                DownloadHttpClient.ValidateVideoResponse(response);
+                long? expectedBytes = response.Content.Headers.ContentLength;
+                long total = expectedBytes ?? 0;
                 await using (var input = await response.Content.ReadAsStreamAsync(token))
                 await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true))
                 {
-                    var buffer = new byte[65536];
-                    long written = 0;
                     var lastUpdate = Stopwatch.StartNew();
-                    int count;
-                    while ((count = await input.ReadAsync(buffer.AsMemory(), token)) > 0)
+                    await DownloadHttpClient.CopyBodyAsync(input, output, expectedBytes, written =>
                     {
-                        await output.WriteAsync(buffer.AsMemory(0, count), token);
-                        written += count;
                         if (total > 0 && (lastUpdate.ElapsedMilliseconds >= 100 || written == total))
                         {
                             UpdateHUDProgress((double)written / total, written, total);
                             lastUpdate.Restart();
                         }
-                    }
-                    if (total > 0 && written != total) throw new IOException("视频下载不完整");
+                    }, TimeSpan.FromSeconds(30), token);
                     await output.FlushAsync(token);
                 }
-                await CommitDownloadAsync(temporary, destination, token);
+                return await CommitDownloadAsync(temporary, destination, token);
             }
             finally { DownloadFile.Cleanup(temporary); }
         }
 
-        private async Task PerformBlobDownloadAsync(string url, string destination, CancellationToken token)
+        private async Task<string> PerformBlobDownloadAsync(CoreWebView2 core, string url, string destination, CancellationToken token)
         {
             var request = new BlobRequest { Url = url, TemporaryPath = DownloadFile.TemporaryPath(destination) };
             pendingBlob = request;
@@ -265,25 +359,36 @@ namespace TokMac
             try
             {
                 // JSON encoding also handles apostrophes, backslashes, and line breaks.
-                await webView.CoreWebView2.ExecuteScriptAsync($"window.tokmacDownloadBlob({JsonSerializer.Serialize(url)});");
+                await core.ExecuteScriptAsync($"window.tokmacDownloadBlob({JsonSerializer.Serialize(url)});").WaitAsync(token);
                 await request.Started.Task.WaitAsync(TimeSpan.FromSeconds(15), token);
                 await request.Completed.Task.WaitAsync(token);
-                await CommitDownloadAsync(request.TemporaryPath, destination, token);
+                return await CommitDownloadAsync(request.TemporaryPath, destination, token);
             }
             finally
             {
-                if (request.Operation is { } operation)
+                try
                 {
-                    if (operation.State == CoreWebView2DownloadState.InProgress)
+                    if (request.Operation is { } operation)
                     {
-                        operation.Cancel();
-                        try { await request.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
+                        if (operation.State == CoreWebView2DownloadState.InProgress)
+                        {
+                            operation.Cancel();
+                            try { await request.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5)); }
+                            catch (Exception) when (token.IsCancellationRequested) { }
+                        }
+                        operation.BytesReceivedChanged -= request.ProgressHandler;
+                        operation.StateChanged -= request.StateHandler;
                     }
-                    operation.BytesReceivedChanged -= request.ProgressHandler;
-                    operation.StateChanged -= request.StateHandler;
                 }
-                if (pendingBlob == request) pendingBlob = null;
-                DownloadFile.Cleanup(request.TemporaryPath);
+                catch (Exception error) when (token.IsCancellationRequested && error is COMException or InvalidOperationException)
+                {
+                    // The browser may already have released this native download.
+                }
+                finally
+                {
+                    if (pendingBlob == request) pendingBlob = null;
+                    DownloadFile.Cleanup(request.TemporaryPath);
+                }
             }
         }
 
@@ -447,9 +552,9 @@ namespace TokMac
             }
         }
 
-        private void BtnReload_Click(object sender, RoutedEventArgs e)
+        private async void BtnReload_Click(object sender, RoutedEventArgs e)
         {
-            webView.CoreWebView2?.Reload();
+            await RecoverBrowserAsync();
         }
 
         internal void ToggleFullScreen()

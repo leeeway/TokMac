@@ -6,6 +6,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../windows/DownloadFile.cs" Link="DownloadFile.cs" />
+    <Compile Include="../../windows/VideoContainer.cs" Link="VideoContainer.cs" />
+    <None Include="../fixtures/tiny.*" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="../../windows/DownloadHttpClient.cs" Link="DownloadHttpClient.cs" />
   </ItemGroup>
 </Project>

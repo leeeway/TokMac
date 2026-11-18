@@ -58,50 +58,63 @@ div[class*="DivTopNavDownloadLink"] {
         e.stopImmediatePropagation();
     }, true);
 
-    // Active video finder
     function getActiveVideo() {
-        const videos = Array.from(document.querySelectorAll('video'));
-        if (!videos.length) return null;
-        const centerY = window.innerHeight / 2;
-        let bestVideo = null;
-        let minDistance = 999999;
-        for (const v of videos) {
-            const rect = v.getBoundingClientRect();
-            if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 ||
-                rect.top >= window.innerHeight || rect.right <= 0 || rect.left >= window.innerWidth) continue;
-            const dist = Math.abs((rect.top + rect.bottom) / 2 - centerY);
-            if (dist < minDistance) {
-                minDistance = dist;
-                bestVideo = v;
+        const { innerWidth: width, innerHeight: height } = window;
+        let best = null;
+        for (const video of document.querySelectorAll('video')) {
+            const rect = video.getBoundingClientRect();
+            const visibleWidth = Math.min(rect.right, width) - Math.max(rect.left, 0);
+            const visibleHeight = Math.min(rect.bottom, height) - Math.max(rect.top, 0);
+            if (visibleWidth <= 0 || visibleHeight <= 0) continue;
+            const area = visibleWidth * visibleHeight;
+            if (area < 0.1 * Math.min(rect.width * rect.height, width * height)) continue;
+            const style = window.getComputedStyle?.(video);
+            if (style?.visibility === 'hidden' || style?.visibility === 'collapse' || style?.opacity === '0') continue;
+
+            const playing = video.paused === false && !video.ended;
+            const distance = Math.hypot((rect.left + rect.right - width) / 2, (rect.top + rect.bottom - height) / 2);
+            if (!best || (playing && !best.playing) ||
+                (playing === best.playing && (area > best.area || (area === best.area && distance < best.distance)))) {
+                best = { video, playing, area, distance };
             }
         }
-        return bestVideo;
+        return best?.video ?? null;
     }
 
-    // Programmatic Navigation Helpers (called via menu or toolbar)
-    window.tokmacNextVideo = function() {
-        const downArrow = document.querySelector('button[aria-label*="Next"]') || 
-                          document.querySelector('button[aria-label*="下一个"]') ||
-                          document.querySelector('button[data-e2e="arrow-right"]') ||
-                          document.querySelector('button[data-e2e="feed-arrow-down"]');
-        if (downArrow) {
-            downArrow.click();
-        } else {
-            window.scrollBy({ top: window.innerHeight * 0.85, behavior: 'smooth' });
-        }
-    };
+    function videoCard(video) {
+        return video.closest('[data-e2e="recommend-list-item-container"], article, [data-e2e="feed-item"]');
+    }
 
-    window.tokmacPrevVideo = function() {
-        const upArrow = document.querySelector('button[aria-label*="Previous"]') || 
-                        document.querySelector('button[aria-label*="上一个"]') ||
-                        document.querySelector('button[data-e2e="arrow-left"]') ||
-                        document.querySelector('button[data-e2e="feed-arrow-up"]');
-        if (upArrow) {
-            upArrow.click();
-        } else {
-            window.scrollBy({ top: -window.innerHeight * 0.85, behavior: 'smooth' });
+    function navigateVideo(direction) {
+        const video = getActiveVideo();
+        if (!video) return;
+        const forward = direction > 0;
+        const feedControl = forward ? '[data-e2e="feed-arrow-down"]' : '[data-e2e="feed-arrow-up"]';
+        const videoLabel = forward
+            ? 'button[aria-label="Next video" i], button[aria-label="下一个视频"]'
+            : 'button[aria-label="Previous video" i], button[aria-label="上一个视频"]';
+        const dialog = video.closest('[role="dialog"]');
+        const feed = video.closest('[data-e2e="recommend-list"], [data-e2e="feed-list"], main');
+        const scope = dialog || feed || document;
+        const button = scope.querySelector(feedControl) || scope.querySelector(videoLabel);
+        if (button && !button.disabled) {
+            button.click();
+            return;
         }
-    };
+        // Scroll the container owning this player instead of the page or an unrelated carousel.
+        for (let parent = video.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+            if (parent.scrollHeight > parent.clientHeight &&
+                /^(auto|scroll|overlay)$/.test(window.getComputedStyle?.(parent)?.overflowY ?? '')) {
+                parent.scrollBy({ top: direction * parent.clientHeight * 0.85, behavior: 'smooth' });
+                return;
+            }
+            if (parent === dialog) return;
+        }
+        if (!dialog) window.scrollBy({ top: direction * window.innerHeight * 0.85, behavior: 'smooth' });
+    }
+
+    window.tokmacNextVideo = () => navigateVideo(1);
+    window.tokmacPrevVideo = () => navigateVideo(-1);
 
     window.tokmacTogglePlay = function() {
         const v = getActiveVideo();
@@ -117,12 +130,19 @@ div[class*="DivTopNavDownloadLink"] {
     };
 
     window.tokmacToggleComments = function() {
-        const commentBtn = document.querySelector('button[data-e2e="feed-comment-icon"]') ||
-                           document.querySelector('span[data-e2e="comment-icon"]') ||
-                           document.querySelector('[data-e2e="feed-comment-button"]') ||
-                           document.querySelector('button[aria-label*="Comment"]') ||
-                           document.querySelector('button[aria-label*="评论"]');
-        if (commentBtn) commentBtn.click();
+        const video = getActiveVideo();
+        if (!video) return;
+        const selector = 'button[data-e2e="feed-comment-icon"], span[data-e2e="comment-icon"], ' +
+            '[data-e2e="feed-comment-button"], button[aria-label*="Comment"], button[aria-label*="评论"]';
+        const card = videoCard(video);
+        const commentBtn = card?.querySelector(selector);
+        if (commentBtn) {
+            commentBtn.click();
+        } else if (document.querySelectorAll('video').length === 1) {
+            // A dedicated video page may put its comment control beside the player.
+            const buttons = document.querySelectorAll(selector);
+            if (buttons.length === 1) buttons[0].click();
+        }
     };
 
     function isEditing(element) {
@@ -183,7 +203,7 @@ div[class*="DivTopNavDownloadLink"] {
     window.tokmacGetVideoDownloadInfo = function() {
         const video = getActiveVideo();
         if (!video) return null;
-        const card = video.closest('[data-e2e="recommend-list-item-container"], article, [data-e2e="feed-item"]');
+        const card = videoCard(video);
         const link = card?.querySelector('a[href*="/video/"]');
         const id = videoID(link?.href) || videoID(window.location.pathname);
         const metadata = matchingMetadata(id);

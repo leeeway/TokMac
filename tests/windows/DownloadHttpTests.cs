@@ -18,12 +18,83 @@ internal static class DownloadHttpTests
         await RejectsUnsafeRedirects();
         await RedirectLoopIsBounded();
         await RealHttpTransportDoesNotForwardCookies();
-        Console.WriteLine("5 redirect and Cookie isolation regression checks passed.");
+        RejectsPartialVideoResponses();
+        await StalledBodyFailsWithoutCommitting();
+        await UserCancellationRemainsCancellation();
+        await CompleteBodyCopiesAndReportsProgress();
+        Console.WriteLine("9 HTTP download regression checks passed.");
     }
 
     private static void Check(bool condition, string message)
     {
         if (!condition) throw new Exception(message);
+    }
+
+    private static void RejectsPartialVideoResponses()
+    {
+        foreach (var status in new[] { HttpStatusCode.PartialContent, HttpStatusCode.OK })
+        {
+            using var response = new HttpResponseMessage(status) { Content = new ByteArrayContent(new byte[8]) };
+            response.Content.Headers.ContentType = new("video/mp4");
+            response.Content.Headers.ContentRange = new(0, 7, 1000);
+            try { DownloadHttpClient.ValidateVideoResponse(response); }
+            catch (IOException) { continue; }
+            throw new Exception("An incomplete video response was accepted");
+        }
+    }
+
+    private sealed class StallingStream : MemoryStream
+    {
+        internal StallingStream() : base(new byte[] { 1, 2, 3 }) { }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (Position < Length) return await base.ReadAsync(buffer, cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
+    }
+
+    private static async Task StalledBodyFailsWithoutCommitting()
+    {
+        using var source = new StallingStream();
+        using var destination = new MemoryStream();
+        using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            await DownloadHttpClient.CopyBodyAsync(source, destination, 8, _ => { }, TimeSpan.FromMilliseconds(100), safety.Token);
+        }
+        catch (TimeoutException)
+        {
+            Check(destination.Length == 3, "Timeout must occur after the first bytes are copied");
+            return;
+        }
+        throw new Exception("The stalled read was allowed to complete");
+    }
+
+    private static async Task UserCancellationRemainsCancellation()
+    {
+        using var source = new StallingStream();
+        using var destination = new MemoryStream();
+        using var userCancel = new CancellationTokenSource();
+        try
+        {
+            await DownloadHttpClient.CopyBodyAsync(source, destination, 8, _ => userCancel.Cancel(), TimeSpan.FromSeconds(2), userCancel.Token);
+        }
+        catch (OperationCanceledException) { return; }
+        throw new Exception("The user cancellation was not propagated");
+    }
+
+    private static async Task CompleteBodyCopiesAndReportsProgress()
+    {
+        byte[] payload = new byte[100000];
+        payload[^1] = 37;
+        using var source = new MemoryStream(payload);
+        using var destination = new MemoryStream();
+        long progress = 0;
+        await DownloadHttpClient.CopyBodyAsync(source, destination, payload.Length, written => progress = written,
+            TimeSpan.FromSeconds(2), CancellationToken.None);
+        Check(progress == payload.Length && destination.ToArray().AsSpan().SequenceEqual(payload), "Complete transfers must keep all bytes and report progress");
     }
 
     private sealed class Transport : HttpMessageHandler

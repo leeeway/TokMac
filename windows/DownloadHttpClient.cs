@@ -56,5 +56,44 @@ internal sealed class DownloadHttpClient : IDisposable
         throw new IOException("视频重定向次数过多");
     }
 
+    internal static void ValidateVideoResponse(HttpResponseMessage response)
+    {
+        response.EnsureSuccessStatusCode();
+        if ((int)response.StatusCode == 206 || response.Content.Headers.Contains("Content-Range"))
+            throw new IOException("服务器只返回了视频片段，未保存视频");
+        if (!DownloadFile.IsVideoMime(response.Content.Headers.ContentType?.MediaType))
+            throw new IOException("服务器返回的内容不是视频");
+    }
+
+    internal static async Task CopyBodyAsync(Stream input, Stream output, long? expectedBytes,
+        Action<long> progress, TimeSpan idleTimeout, CancellationToken token)
+    {
+        using var idle = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var buffer = new byte[65536];
+        long written = 0;
+        while (true)
+        {
+            int count;
+            idle.CancelAfter(idleTimeout);
+            try
+            {
+                count = await input.ReadAsync(buffer.AsMemory(), idle.Token);
+                idle.Token.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested && idle.IsCancellationRequested)
+            {
+                throw new TimeoutException("视频下载超时，服务器长时间未发送数据");
+            }
+            finally { idle.CancelAfter(Timeout.InfiniteTimeSpan); }
+
+            if (count == 0) break;
+            await output.WriteAsync(buffer.AsMemory(0, count), token);
+            written += count;
+            progress(written);
+        }
+        if (expectedBytes.HasValue && written != expectedBytes.Value)
+            throw new IOException("视频下载不完整");
+    }
+
     public void Dispose() => client.Dispose();
 }

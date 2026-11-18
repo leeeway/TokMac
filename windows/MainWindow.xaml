@@ -54,7 +54,7 @@
         </Border>
 
         <!-- Main WebView2 Container -->
-        <Grid Grid.Row="1">
+        <Grid x:Name="webHost" Grid.Row="1">
             <wv2:WebView2CompositionControl x:Name="webView" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
 
             <!-- Floating Download Progress HUD Overlay -->
@@ -93,6 +93,13 @@
                                 Width="22" Height="22" Padding="0" Click="HudCloseBtn_Click" ToolTip="关闭" />
                     </StackPanel>
                 </Grid>
+            </Border>
+            <Border x:Name="browserStatus" Visibility="Collapsed" Background="#F0222226"
+                    HorizontalAlignment="Center" VerticalAlignment="Center" Padding="20" CornerRadius="8" MaxWidth="400">
+                <StackPanel>
+                    <TextBlock x:Name="browserStatusText" Foreground="White" TextWrapping="Wrap" Margin="0,0,0,12" />
+                    <Button Content="重新加载" Click="BtnReload_Click" HorizontalAlignment="Center" />
+                </StackPanel>
             </Border>
         </Grid>
     </Grid>

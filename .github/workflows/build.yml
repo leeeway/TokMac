@@ -35,6 +35,7 @@ jobs:
       - name: Test release validation
         run: |
           python3 tests/release_validation_test.py
+          python3 tests/replace_release_assets_test.py
           python3 tests/signing_flow_test.py
 
   build-macos:

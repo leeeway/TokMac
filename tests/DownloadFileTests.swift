@@ -6,12 +6,18 @@ struct DownloadFileTests {
         let tests = DownloadFileTests()
         tests.testRejectsUntrustedPagesAndForeignBlobs()
         try tests.testHTTPErrorCannotBeSavedEvenWithVideoMime()
+        tests.testRejectsPartialVideoResponses()
         tests.testRejectsHTMLAndJSONErrorBodiesWithSuccessStatus()
         try tests.testAcceptsVideoAndNativeBlobResponses()
         try tests.testSuccessfulDownloadAtomicallyReplacesExistingFile()
         try tests.testMissingOrEmptyDownloadPreservesOriginal()
         try tests.testFailedReplacementPreservesDestinationAndDownloadedBytes()
-        print("7 Swift download validation and atomic-save checks passed.")
+        try tests.testFormatCorrectionDoesNotOverwriteUnselectedFiles()
+        print("9 Swift download validation, file format and atomic-save checks passed.")
+    }
+
+    private func fixture(_ name: String) throws -> Data {
+        try Data(contentsOf: URL(fileURLWithPath: "tests/fixtures/" + name))
     }
 
     private let page = URL(string: "https://www.tiktok.com/foryou")!
@@ -39,6 +45,15 @@ struct DownloadFileTests {
         }
     }
 
+    func testRejectsPartialVideoResponses() {
+        for (status, range) in [(206, "bytes 0-7/1000"), (206, nil), (200, "bytes 0-7/1000")] {
+            var headers = ["Content-Type": "video/mp4", "Content-Length": "8"]
+            headers["Content-Range"] = range
+            let response = HTTPURLResponse(url: page, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
+            checkThrows(try DownloadFile.validateResponse(response))
+        }
+    }
+
     func testAcceptsVideoAndNativeBlobResponses() throws {
         for mime in ["video/mp4", "video/webm", "application/octet-stream", "application/mp4"] {
             let response = HTTPURLResponse(url: page, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": mime])!
@@ -53,9 +68,10 @@ struct DownloadFileTests {
             try Data("original".utf8).write(to: target)
             let temporary = DownloadFile.temporaryURL(for: target)
             checkEqual(temporary.deletingLastPathComponent(), target.deletingLastPathComponent())
-            try Data("new video".utf8).write(to: temporary)
+            let video = try fixture("tiny.mp4")
+            try video.write(to: temporary)
             try DownloadFile.commit(temporary, to: target)
-            checkEqual(try Data(contentsOf: target), Data("new video".utf8))
+            checkEqual(try Data(contentsOf: target), video)
             checkFalse(FileManager.default.fileExists(atPath: temporary.path))
         }
     }
@@ -69,21 +85,52 @@ struct DownloadFileTests {
             checkThrows(try DownloadFile.commit(temporary, to: target))
             try Data().write(to: temporary)
             checkThrows(try DownloadFile.commit(temporary, to: target))
+            try Data("{\"error\":\"Not video\"}".utf8).write(to: temporary)
+            checkThrows(try DownloadFile.commit(temporary, to: target))
+            try fixture("tiny.mp4").dropLast().write(to: temporary)
+            checkThrows(try DownloadFile.commit(temporary, to: target))
             checkEqual(try Data(contentsOf: target), original)
         }
     }
 
     func testFailedReplacementPreservesDestinationAndDownloadedBytes() throws {
         try withDirectory { directory in
-            let target = directory.appendingPathComponent("existing-directory")
+            let target = directory.appendingPathComponent("existing-directory.mp4")
             try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false)
             let sentinel = target.appendingPathComponent("sentinel")
             try Data("original".utf8).write(to: sentinel)
             let temporary = DownloadFile.temporaryURL(for: target)
-            try Data("new video".utf8).write(to: temporary)
+            let video = try fixture("tiny.mp4")
+            try video.write(to: temporary)
             checkThrows(try DownloadFile.commit(temporary, to: target))
             checkEqual(try String(contentsOf: sentinel, encoding: .utf8), "original")
-            checkEqual(try String(contentsOf: temporary, encoding: .utf8), "new video")
+            checkEqual(try Data(contentsOf: temporary), video)
+        }
+    }
+
+    func testFormatCorrectionDoesNotOverwriteUnselectedFiles() throws {
+        try withDirectory { directory in
+            let target = directory.appendingPathComponent("clip.mp4")
+            let movie = directory.appendingPathComponent("clip.mov")
+            let temporary = DownloadFile.temporaryURL(for: target)
+            let original = Data("original".utf8)
+            try original.write(to: target)
+            try original.write(to: movie)
+            try fixture("tiny.mov").write(to: temporary)
+            checkThrows(try DownloadFile.commit(temporary, to: target))
+            checkEqual(try Data(contentsOf: movie), original)
+            try FileManager.default.removeItem(at: movie)
+            checkEqual(try DownloadFile.commit(temporary, to: target), movie)
+            checkEqual(try Data(contentsOf: movie), try fixture("tiny.mov"))
+            checkEqual(try Data(contentsOf: target), original)
+
+            // Minimal EBML structure with a WebM video track, an unknown-size segment and a cluster.
+            let webM = Data([0x1a, 0x45, 0xdf, 0xa3, 0x87, 0x42, 0x82, 0x84, 0x77, 0x65, 0x62, 0x6d,
+                             0x18, 0x53, 0x80, 0x67, 0xff, 0x16, 0x54, 0xae, 0x6b, 0x85, 0xae, 0x83,
+                             0x83, 0x81, 0x01, 0x1f, 0x43, 0xb6, 0x75, 0x83, 0xe7, 0x81, 0x00])
+            try webM.write(to: temporary)
+            checkEqual(try DownloadFile.commit(temporary, to: target).pathExtension, "webm")
+            checkEqual(try Data(contentsOf: target), original)
         }
     }
 
