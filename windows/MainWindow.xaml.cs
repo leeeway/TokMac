@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -44,6 +45,9 @@ namespace TokMac
         private readonly WatchLaterStore watchLater = new(Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TokMac", "watch-later.json"));
         private readonly DispatcherTimer videoActionTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+        private readonly HashSet<string> loadingThumbnails = [];
+        private WatchLaterWindow? watchLaterWindow;
+        private (SavedVideo Video, ulong? Navigation)? pendingWatchLaterDetails;
 
         private sealed class BlobRequest
         {
@@ -143,12 +147,24 @@ namespace TokMac
                     if (browser == core && Uri.TryCreate(core.Source, UriKind.Absolute, out var page) &&
                         DownloadFile.IsTrustedPage(page)) lastTrustedPage = page;
                 };
+                core.NavigationStarting += (_, args) =>
+                {
+                    if (browser != core || pendingWatchLaterDetails is not { } pending || pending.Navigation == args.NavigationId) return;
+                    if (SavedVideo.Parse(args.Uri)?.Url == pending.Video.Url)
+                        pendingWatchLaterDetails = (pending.Video, args.NavigationId);
+                };
                 core.NavigationCompleted += (_, args) =>
                 {
                     if (browser != core) return;
                     if (args.IsSuccess) browserStatus.Visibility = Visibility.Collapsed;
                     else if (args.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
                         ShowBrowserError("页面加载失败，请重试。");
+                    if (pendingWatchLaterDetails is { } pending && pending.Navigation == args.NavigationId)
+                    {
+                        pendingWatchLaterDetails = null;
+                        if (args.IsSuccess && SavedVideo.Parse(core.Source)?.Url == pending.Video.Url)
+                            _ = RefreshSavedVideoAsync(pending.Video);
+                    }
                 };
                 core.ProcessFailed += (_, args) =>
                 {
@@ -281,7 +297,7 @@ namespace TokMac
         private async void CopyVideoLink_Click(object sender, RoutedEventArgs e) => await CopyCurrentVideoLinkAsync();
         private async void ShowWatchLater_Click(object sender, RoutedEventArgs e) => await ShowWatchLaterAsync();
 
-        private async Task<SavedVideo?> ResolveCurrentVideoAsync()
+        private async Task<T?> ReadVideoScriptAsync<T>(string script) where T : class
         {
             var core = browser;
             var page = webView.Source;
@@ -289,24 +305,32 @@ namespace TokMac
             {
                 try
                 {
-                    string result = await core.ExecuteScriptAsync("window.tokmacCurrentVideoLink?.() ?? null");
-                    if (core == browser && Equals(webView.Source, page) &&
-                        SavedVideo.Parse(JsonSerializer.Deserialize<string>(result)) is { } video)
-                        return video;
+                    string result = await core.ExecuteScriptAsync(script);
+                    if (!closing && core == browser && Equals(webView.Source, page))
+                        return JsonSerializer.Deserialize<T>(result, JsonSerializerOptions.Web);
                 }
                 catch (Exception error) when (error is COMException or InvalidOperationException or JsonException)
                 {
                     Debug.WriteLine(error);
                 }
             }
-            ShowVideoActionStatus("当前视频没有可用链接");
             return null;
         }
 
         private async Task SaveCurrentVideoAsync()
         {
-            if (await ResolveCurrentVideoAsync() is not { } video) return;
-            try { ShowVideoActionStatus(watchLater.Add(video) ? "已加入稍后看" : "视频已在稍后看中"); }
+            var details = await ReadVideoScriptAsync<WatchLaterDetails>("window.tokmacWatchLaterDetails?.() ?? null");
+            if (details?.Video is not { } video)
+            {
+                ShowVideoActionStatus("当前视频没有可用链接");
+                return;
+            }
+            try
+            {
+                ShowVideoActionStatus(watchLater.Add(video) ? "已加入稍后看" : "视频已在稍后看中");
+                watchLaterWindow?.Reload();
+                _ = LoadThumbnailAsync(details.ThumbnailUrl, video.Id);
+            }
             catch (Exception error)
             {
                 Debug.WriteLine(error);
@@ -316,7 +340,12 @@ namespace TokMac
 
         private async Task CopyCurrentVideoLinkAsync()
         {
-            if (await ResolveCurrentVideoAsync() is not { } video) return;
+            string? link = await ReadVideoScriptAsync<string>("window.tokmacCurrentVideoLink?.() ?? null");
+            if (SavedVideo.Parse(link) is not { } video)
+            {
+                ShowVideoActionStatus("当前视频没有可用链接");
+                return;
+            }
             try
             {
                 Clipboard.SetText(video.Url.AbsoluteUri);
@@ -331,9 +360,15 @@ namespace TokMac
 
         private async Task ShowWatchLaterAsync()
         {
+            if (watchLaterWindow != null) return;
             var dialog = new WatchLaterWindow(watchLater) { Owner = this };
-            if (dialog.ShowDialog() != true || dialog.SelectedVideo is not { } video) return;
+            watchLaterWindow = dialog;
+            bool? result;
+            try { result = dialog.ShowDialog(); }
+            finally { watchLaterWindow = null; }
+            if (result != true || dialog.SelectedVideo is not { } video) return;
             lastTrustedPage = video.Url;
+            pendingWatchLaterDetails = video.NeedsDetails ? (video, null) : null;
             try
             {
                 if (browser is { } core) core.Navigate(video.Url.AbsoluteUri);
@@ -344,6 +379,34 @@ namespace TokMac
                 Debug.WriteLine(error);
                 ShowBrowserError("视频无法打开，请重新加载。");
             }
+        }
+
+        private async Task RefreshSavedVideoAsync(SavedVideo saved)
+        {
+            string link = JsonSerializer.Serialize(saved.Url.AbsoluteUri);
+            var details = await ReadVideoScriptAsync<WatchLaterDetails>($"window.tokmacWatchLaterDetails?.({link}) ?? null");
+            if (details?.Video is not { } video || video.Url != saved.Url) return;
+            try
+            {
+                watchLater.Refresh(video);
+                watchLaterWindow?.Reload();
+                if (saved.Thumbnail == null) await LoadThumbnailAsync(details.ThumbnailUrl, video.Id);
+            }
+            catch (Exception error) { Debug.WriteLine(error); }
+        }
+
+        private async Task LoadThumbnailAsync(string? url, string id)
+        {
+            if (url == null || !loadingThumbnails.Add(id)) return;
+            try
+            {
+                var data = await WatchLaterThumbnails.FetchAsync(url);
+                if (closing || data == null) return;
+                watchLater.RefreshThumbnail(id, data);
+                watchLaterWindow?.Reload();
+            }
+            catch (Exception error) { Debug.WriteLine(error); }
+            finally { loadingThumbnails.Remove(id); }
         }
 
         private void ShowVideoActionStatus(string message)

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 
@@ -9,29 +10,46 @@ namespace TokMac;
 public partial class WatchLaterWindow : Window
 {
     private readonly WatchLaterStore store;
+    private IReadOnlyList<SavedVideo>? entries;
     internal SavedVideo? SelectedVideo => videos.SelectedItem as SavedVideo;
 
     internal WatchLaterWindow(WatchLaterStore store)
     {
         this.store = store;
         InitializeComponent();
-        LoadVideos();
+        search.TextChanged += (_, _) => ApplySearch();
+        Loaded += (_, _) => search.Focus();
+        Reload();
     }
 
-    private void LoadVideos(int selectedIndex = 0)
+    internal void Reload()
     {
-        IReadOnlyList<SavedVideo> entries;
         try { entries = store.Videos(); }
         catch (Exception error)
         {
             Debug.WriteLine(error);
+            entries = null;
+        }
+        ApplySearch();
+    }
+
+    private void ApplySearch()
+    {
+        if (entries == null)
+        {
             videos.ItemsSource = null;
             ShowStatus("无法读取稍后看列表");
             return;
         }
-        videos.ItemsSource = entries;
-        videos.SelectedIndex = Math.Min(selectedIndex, entries.Count - 1);
-        ShowStatus(entries.Count == 0 ? "还没有收藏的视频" : null);
+        var selected = SelectedVideo?.Id;
+        var matches = entries.Where(video => video.Matches(search.Text)).ToList();
+        videos.ItemsSource = matches;
+        if (matches.Count > 0)
+        {
+            videos.SelectedIndex = Math.Max(0, matches.FindIndex(video => video.Id == selected));
+            videos.ScrollIntoView(videos.SelectedItem);
+        }
+        ShowStatus(entries.Count == 0 ? "还没有收藏的视频" : matches.Count == 0 ? "没有匹配的视频" : null);
     }
 
     private void ShowStatus(string? message)
@@ -60,6 +78,6 @@ public partial class WatchLaterWindow : Window
             ShowStatus("无法移除此视频");
             return;
         }
-        LoadVideos(videos.SelectedIndex);
+        Reload();
     }
 }

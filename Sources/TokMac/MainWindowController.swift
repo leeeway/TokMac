@@ -5,6 +5,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private let webViewController = WebViewController()
     private let watchLater = WatchLaterStore(file: URL.applicationSupportDirectory
         .appendingPathComponent("TokMac", isDirectory: true).appendingPathComponent("watch-later.json"))
+    private var watchLaterWindow: WatchLaterWindow?
+    private var loadingThumbnails = Set<String>()
     private(set) var isAlwaysOnTop: Bool = false
 
     private let toolbarID = NSToolbar.Identifier("TokMacMainToolbar")
@@ -135,11 +137,17 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     @objc func saveCurrentVideo() {
-        webViewController.currentVideo { [weak self] video in
-            guard let self, let video else { return }
+        webViewController.watchLaterDetails { [weak self] details in
+            guard let self else { return }
+            guard let details, let video = details.video else {
+                self.webViewController.showNotification(title: "找不到当前视频链接", body: "试试打开视频详情页")
+                return
+            }
             do {
                 let added = try self.watchLater.add(video)
                 self.webViewController.showNotification(title: added ? "已加入稍后看" : "已在稍后看中", body: video.title)
+                self.watchLaterWindow?.reload()
+                self.loadThumbnail(details.thumbnailUrl, for: video.id)
             } catch {
                 self.showWatchLaterError(error)
             }
@@ -147,41 +155,46 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     @objc func showWatchLater() {
-        guard let window, window.attachedSheet == nil else { return }
-        do {
-            let videos = try watchLater.videos()
-            let alert = NSAlert()
-            alert.messageText = "稍后看"
-            guard !videos.isEmpty else {
-                alert.informativeText = "还没有收藏的视频。播放视频时可以从「稍后看」菜单加入收藏。"
-                alert.addButton(withTitle: "关闭")
-                alert.beginSheetModal(for: window)
-                return
-            }
-
-            let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 350, height: 30))
-            picker.setAccessibilityLabel("收藏的视频")
-            picker.addItems(withTitles: videos.map(\.title))
-            alert.accessoryView = picker
-            alert.addButton(withTitle: "打开")
-            alert.addButton(withTitle: "关闭").keyEquivalent = "\u{1b}"
-            alert.addButton(withTitle: "移除收藏")
-            alert.beginSheetModal(for: window) { [weak self] response in
-                guard let self, videos.indices.contains(picker.indexOfSelectedItem) else { return }
-                let video = videos[picker.indexOfSelectedItem]
-                if response == .alertFirstButtonReturn {
-                    self.webViewController.openSavedVideo(video)
-                } else if response == .alertThirdButtonReturn {
-                    do {
-                        try self.watchLater.remove(video)
-                        DispatchQueue.main.async { [weak self] in self?.showWatchLater() }
-                    } catch {
-                        self.showWatchLaterError(error)
-                    }
+        guard let window, window.attachedSheet == nil, watchLaterWindow == nil else { return }
+        let controller = WatchLaterWindow(store: watchLater)
+        guard let sheet = controller.window else { return }
+        watchLaterWindow = controller
+        window.beginSheet(sheet) { [weak self] _ in
+            guard let self else { return }
+            let video = self.watchLaterWindow?.openedVideo
+            self.watchLaterWindow = nil
+            if let video {
+                self.webViewController.openSavedVideo(video) { [weak self] details in
+                    self?.refreshSavedVideo(details, needsThumbnail: video.thumbnail == nil)
                 }
             }
+        }
+    }
+
+    private func refreshSavedVideo(_ details: WatchLaterDetails, needsThumbnail: Bool) {
+        guard let video = details.video else { return }
+        do {
+            try watchLater.refresh(video)
+            watchLaterWindow?.reload()
+            if needsThumbnail { loadThumbnail(details.thumbnailUrl, for: video.id) }
         } catch {
-            showWatchLaterError(error)
+            NSLog("Cannot refresh saved video: %@", error.localizedDescription)
+        }
+    }
+
+    private func loadThumbnail(_ url: String?, for id: String) {
+        guard url != nil, loadingThumbnails.insert(id).inserted else { return }
+        Task { @MainActor [weak self] in
+            let thumbnail = await WatchLaterThumbnails.fetch(url)
+            guard let self else { return }
+            self.loadingThumbnails.remove(id)
+            guard let thumbnail else { return }
+            do {
+                try self.watchLater.refreshThumbnail(for: id, data: thumbnail)
+                self.watchLaterWindow?.reload()
+            } catch {
+                NSLog("Cannot save thumbnail: %@", error.localizedDescription)
+            }
         }
     }
 

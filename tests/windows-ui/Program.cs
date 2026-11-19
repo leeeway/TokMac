@@ -49,7 +49,16 @@ internal static class Program
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         var store = new WatchLaterStore(Path.Combine(directory, "watch-later.json"));
-        var video = SavedVideo.Parse("https://www.tiktok.com/@current/video/123")!;
+        var png = File.ReadAllBytes("windows/Resources/app.png");
+        var thumbnail = WatchLaterThumbnails.MakeJpeg(png);
+        if (WatchLaterThumbnails.ReadThumbnail(thumbnail) is not { PixelWidth: 64, PixelHeight: 64 } ||
+            WatchLaterThumbnails.MakeJpeg("not an image"u8.ToArray()) != null ||
+            WatchLaterThumbnails.AllowedUrl("https://tiktokcdn.com.invalid/cover.jpg") != null ||
+            WatchLaterThumbnails.AllowedUrl("https://img.tiktokcdn-us.com/cover.jpg") == null)
+            throw new Exception("Thumbnails must be validated and converted into a local JPEG");
+        var legacy = SavedVideo.Parse("https://www.tiktok.com/@legacy/video/456")!;
+        var video = SavedVideo.Parse("https://www.tiktok.com/@current/video/123", "Sunset over Shanghai", thumbnail)!;
+        store.Add(legacy);
         store.Add(video);
         var dialog = new WatchLaterWindow(store);
         try
@@ -58,9 +67,19 @@ internal static class Program
             var open = (Button)dialog.FindName("openButton");
             if (!remove.IsEnabled || !open.IsEnabled || dialog.SelectedVideo?.Url != video.Url)
                 throw new Exception("A saved video must be selected and available to open or remove");
+            var search = (TextBox)dialog.FindName("search");
+            search.Text = "missing";
+            if (open.IsEnabled || remove.IsEnabled || dialog.SelectedVideo != null)
+                throw new Exception("An empty search must disable item actions");
+            search.Text = "SHANGHAI current";
+            if (dialog.SelectedVideo?.Id != video.Id)
+                throw new Exception("Search must filter titles and authors");
             remove.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            if (remove.IsEnabled || open.IsEnabled || dialog.SelectedVideo != null || store.Videos().Count != 0)
-                throw new Exception("Removing the last video must persist and leave an empty list");
+            if (remove.IsEnabled || open.IsEnabled || dialog.SelectedVideo != null || store.Videos().Count != 1)
+                throw new Exception("Removing a filtered video must preserve hidden matches");
+            search.Text = "456";
+            if (dialog.SelectedVideo?.Id != legacy.Id)
+                throw new Exception("Old bookmarks must remain available by video ID");
         }
         finally
         {

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Text.Json;
 using TokMac;
 
 static void Check(bool condition, string message)
@@ -22,11 +23,25 @@ static void TestWatchLater(string directory)
     var renamed = SavedVideo.Parse("https://www.tiktok.com/@renamed/video/123")!;
     Check(first.Url.AbsoluteUri == "https://www.tiktok.com/@first/video/123", "Permalinks must be canonical");
     Check(store.Videos().Count == 0, "Missing library must be empty");
-    Check(store.Add(first) && store.Add(second) && !store.Add(renamed), "Deduplicate by video ID");
+    Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+    string legacy = JsonSerializer.Serialize(new[] { second.Url.AbsoluteUri, first.Url.AbsoluteUri });
+    File.WriteAllText(file, legacy);
+    var old = store.Videos();
+    Check(old.Count == 2 && old[0].Url == second.Url && old[1].Url == first.Url &&
+        old[1].Matches(" FIRST 123 ") && File.ReadAllText(file) == legacy, "Legacy bookmarks must stay readable and searchable");
+    var enriched = SavedVideo.Parse(first.Url.AbsoluteUri, "山间\n Night Walk")!;
+    byte[] cover = [1, 2, 3];
+    store.Refresh(enriched);
+    store.RefreshThumbnail(first.Id, cover);
+    Check(!store.Add(renamed), "Deduplicate by video ID");
     var persisted = new WatchLaterStore(file).Videos();
-    Check(persisted.Count == 2 && persisted[0].Url == second.Url && persisted[1].Url == renamed.Url,
-        "Newest videos go first and a renamed author updates an existing video");
+    Check(persisted.Count == 2 && persisted[0].Url == second.Url && persisted[1].Url == renamed.Url &&
+        persisted[1].Caption == "山间 Night Walk" && persisted[1].Thumbnail.AsSpan().SequenceEqual(cover) &&
+        persisted[1].Matches("night RENAMED 山间") && !persisted[1].Matches("night absent"),
+        "Rich metadata must persist and remain searchable after a link-only update");
     store.Remove(first);
+    store.Refresh(enriched);
+    store.RefreshThumbnail(first.Id, cover);
     var remaining = new WatchLaterStore(file).Videos();
     Check(remaining.Count == 1 && remaining[0].Url == second.Url, "Removal must persist");
     const string corrupt = "[null]";

@@ -17,6 +17,7 @@ if [[ "${1:-}" == "--webkit" ]]; then
     swiftc -module-cache-path "$MODULE_CACHE" -I "$TEST_DIR" -L "$TEST_DIR" -lTokMacCore \
         Sources/TokMac/PopupWindowStore.swift Sources/TokMac/ApplicationMenus.swift \
         Sources/TokMac/MainWindowController.swift Sources/TokMac/DownloadHUDView.swift \
+        Sources/TokMac/WatchLaterWindow.swift Sources/TokMac/WatchLaterThumbnails.swift \
         tests/AppKitRegression.swift -o "$TEST_DIR/appkit-test"
     "$TEST_DIR/appkit-test"
 fi

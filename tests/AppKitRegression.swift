@@ -20,7 +20,8 @@ final class WebViewController: NSViewController {
     func toggleComments() {}
     func copyCurrentVideoLink() {}
     func currentVideo(_ completion: @escaping (SavedVideo?) -> Void) { completion(nil) }
-    func openSavedVideo(_ video: SavedVideo) {}
+    func watchLaterDetails(for expected: SavedVideo? = nil, completion: @escaping (WatchLaterDetails?) -> Void) { completion(nil) }
+    func openSavedVideo(_ video: SavedVideo, onDetails: @escaping (WatchLaterDetails) -> Void) {}
     func showNotification(title: String, body: String) {}
 }
 
@@ -105,6 +106,32 @@ final class PlaybackReceiver: NSObject, PlaybackActions {
         precondition(oldHUD.superview == nil, "Dismissed HUD must be detached after the animation")
         precondition(newHUD.superview === parent && newHUD.canReuse, "Old animations must not remove a new download HUD")
         controller.window?.close()
-        print("AppKit popup lifecycle, system shortcuts, and toolbar regression checks passed.")
+        try! checkWatchLaterWindow()
+        print("AppKit lifecycle, keyboard, toolbar, and watch-later window checks passed.")
+    }
+
+    static func checkWatchLaterWindow() throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = WatchLaterStore(file: directory.appendingPathComponent("watch-later.json"))
+        let cover = try Data(contentsOf: URL(fileURLWithPath: "windows/Resources/app.png"))
+        let thumbnail = WatchLaterThumbnails.makeJPEG(cover)!
+        precondition(thumbnail.starts(with: [0xff, 0xd8, 0xff]) && NSImage(data: thumbnail) != nil)
+        precondition(WatchLaterThumbnails.makeJPEG(Data("not an image".utf8)) == nil)
+        precondition(WatchLaterThumbnails.allowedURL("https://img.tiktokcdn-eu.com/cover.jpg") != nil)
+        precondition(WatchLaterThumbnails.allowedURL("https://tiktokcdn.com.invalid/cover.jpg") == nil)
+        try store.add(SavedVideo("https://www.tiktok.com/@legacy/video/456")!)
+        try store.add(SavedVideo("https://www.tiktok.com/@current/video/123", caption: "Sunset over Shanghai", thumbnail: thumbnail)!)
+        let library = WatchLaterWindow(store: store)
+        let views = library.window!.contentView!.subviews
+        let search = views.compactMap { $0 as? NSSearchField }.first!
+        let table = views.compactMap { ($0 as? NSScrollView)?.documentView as? NSTableView }.first!
+        precondition(table.numberOfRows == 2)
+        for (query, count) in [("SHANGHAI current", 1), ("missing", 0), ("456", 1), ("", 2)] {
+            search.stringValue = query
+            library.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
+            precondition(table.numberOfRows == count, "Watch-later search must filter titles, authors and video IDs")
+        }
+        library.window?.close()
     }
 }

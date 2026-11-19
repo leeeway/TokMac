@@ -20,6 +20,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     private var progressObservation: NSKeyValueObservation?
     private var isCommittingDownload = false
     private var lastProcessRecovery: TimeInterval?
+    private var pendingWatchLaterDetails: (WKNavigation, SavedVideo, (WatchLaterDetails) -> Void)?
 
     weak var delegate: WebViewControllerDelegate?
 
@@ -218,7 +219,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         }
         webView.evaluateJavaScript("window.tokmacCurrentVideoLink?.() ?? null") { [weak self] result, _ in
             guard let self else { return }
-            let video = self.webView.url == page ? (result as? String).flatMap(SavedVideo.init) : nil
+            let video = self.webView.url == page ? (result as? String).flatMap { SavedVideo($0) } : nil
             if video == nil {
                 self.showNotification(title: "找不到当前视频链接", body: "试试打开视频详情页")
             }
@@ -226,8 +227,27 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         }
     }
 
-    func openSavedVideo(_ video: SavedVideo) {
-        webView.load(URLRequest(url: video.url))
+    func watchLaterDetails(for expected: SavedVideo? = nil, completion: @escaping (WatchLaterDetails?) -> Void) {
+        guard let page = webView.url, DownloadFile.isTrustedPage(page) else {
+            completion(nil)
+            return
+        }
+        let link = expected.map { "\"\($0.url.absoluteString)\"" } ?? "null"
+        webView.evaluateJavaScript("window.tokmacWatchLaterDetails?.(\(link)) ?? null") { [weak self] result, _ in
+            guard self?.webView.url == page, let result, JSONSerialization.isValidJSONObject(result),
+                  let data = try? JSONSerialization.data(withJSONObject: result) else {
+                completion(nil)
+                return
+            }
+            completion(try? JSONDecoder().decode(WatchLaterDetails.self, from: data))
+        }
+    }
+
+    func openSavedVideo(_ video: SavedVideo, onDetails: @escaping (WatchLaterDetails) -> Void) {
+        pendingWatchLaterDetails = nil
+        if let navigation = webView.load(URLRequest(url: video.url)), video.needsDetails {
+            pendingWatchLaterDetails = (navigation, video, onDetails)
+        }
     }
 
     func reloadPage() {
@@ -384,6 +404,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     // MARK: - WKNavigationDelegate (Downloads & Navigation)
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard webView === self.webView else { return }
+        pendingWatchLaterDetails = nil
         if downloadID != nil && !isCommittingDownload {
             cancelDownload()
             showDownloadHUD().showError(message: "网页进程已退出，视频下载已取消")
@@ -403,6 +424,20 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         updateCompactModeState()
         updateCleanModeState()
         updateAutoNextState()
+        guard let (pending, video, onDetails) = pendingWatchLaterDetails, pending === navigation else { return }
+        pendingWatchLaterDetails = nil
+        watchLaterDetails(for: video) { details in
+            guard let details, details.video?.url == video.url else { return }
+            onDetails(details)
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        if pendingWatchLaterDetails?.0 === navigation { pendingWatchLaterDetails = nil }
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        if pendingWatchLaterDetails?.0 === navigation { pendingWatchLaterDetails = nil }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, preferences: WKWebpagePreferences, decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {

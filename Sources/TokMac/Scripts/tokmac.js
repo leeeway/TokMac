@@ -96,13 +96,11 @@ div[class*="DivTopNavDownloadLink"] {
         } catch (_) { return null; }
     }
 
-    window.tokmacCurrentVideoLink = function() {
-        const video = getActiveVideo();
+    function activeVideoLink(video, card) {
         if (!video) return null;
         const directLink = videoPermalink(video.closest('a[href]')?.href);
         if (directLink) return directLink;
 
-        const card = videoCard(video);
         const links = new Set(Array.from(card?.querySelectorAll('a[href]') ?? [], link => videoPermalink(link.href))
             .filter(Boolean));
         if (links.size === 1) return links.values().next().value;
@@ -111,7 +109,45 @@ div[class*="DivTopNavDownloadLink"] {
             (links.size === 0 && (video.closest('[role="dialog"], [data-e2e="browse-video"]') ||
                 document.querySelectorAll('video').length === 1)))) return detailLink;
         return null;
+    }
+
+    window.tokmacCurrentVideoLink = function() {
+        const video = getActiveVideo();
+        return activeVideoLink(video, video && videoCard(video));
     };
+
+    window.tokmacWatchLaterDetails = function(expectedLink = null) {
+        const detailLink = videoPermalink(window.location.href);
+        if (expectedLink !== null && detailLink !== expectedLink) return null;
+        const video = getActiveVideo();
+        const card = video && videoCard(video);
+        const activeLink = activeVideoLink(video, card);
+        const url = expectedLink ?? activeLink;
+        if (!url) return null;
+
+        const metadata = matchingMetadata(videoID(url));
+        const isDetail = url === detailLink;
+        const scope = url === activeLink ? card || video?.closest('[data-e2e="browse-video"], [role="dialog"]') : null;
+        const descriptions = scope?.querySelectorAll('[data-e2e="video-desc"], [data-e2e="browse-video-desc"]');
+        const description = descriptions?.length === 1 ? descriptions[0].textContent : null;
+        const meta = name => isDetail ? document.querySelector(`meta[property="${name}"]`)?.content : null;
+        const title = [metadata?.title, metadata?.desc, description, meta('og:description'), meta('og:title')]
+            .find(value => typeof value === 'string' && value.trim());
+        const thumbnailUrl = [metadata?.video?.cover, url === activeLink ? video?.poster : null, meta('og:image')]
+            .map(coverURL).find(Boolean);
+        const caption = title?.trim().slice(0, 1024).replace(/[\uD800-\uDBFF]$/, '');
+        return { url, title: caption || null, thumbnailUrl: thumbnailUrl || null };
+    };
+
+    function coverURL(value) {
+        if (typeof value !== 'string' || !value || value.length > 4096) return null;
+        try {
+            const url = new URL(value, window.location.href);
+            const domains = ['tiktokcdn.com', 'tiktokcdn-us.com', 'tiktokcdn-eu.com'];
+            return url.protocol === 'https:' && !url.port && !url.username && !url.password &&
+                domains.some(domain => url.hostname === domain || url.hostname.endsWith('.' + domain)) ? url.href : null;
+        } catch (_) { return null; }
+    }
 
     function navigateVideo(direction) {
         const video = getActiveVideo();

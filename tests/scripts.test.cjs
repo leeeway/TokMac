@@ -109,6 +109,51 @@ test('current-video links accept a dedicated player but reject untrusted permali
     assert.equal(f.window.tokmacCurrentVideoLink(), 'https://www.tiktok.com/@user/video/123');
 });
 
+test('watch-later details use matched video metadata and skip untrusted cover URLs', () => {
+    const f = fixture({ metadata: { items: [
+        { id: '123', desc: '  Active video title  ', video: { cover: 'https://tiktokcdn.com.evil.example/cover.jpg' } },
+        { id: '999', desc: 'Unrelated video', video: { cover: 'https://images.tiktokcdn.com/other.jpg' } }
+    ] } });
+    f.window.location.href = 'https://www.tiktok.com/foryou';
+    f.video.closest = selector => selector === 'a[href]' ? { href: '/@active/video/123' } : null;
+    f.video.poster = 'https://images.tiktokcdn-us.com/poster.jpg?signature=123';
+    f.document.querySelector = () => ({ content: 'Generic page metadata' });
+    const details = f.window.tokmacWatchLaterDetails();
+    assert.equal(details.url, 'https://www.tiktok.com/@active/video/123');
+    assert.equal(details.title, 'Active video title');
+    assert.equal(details.thumbnailUrl, f.video.poster);
+});
+
+test('watch-later details can read an old bookmark on its own detail page before the player loads', () => {
+    const f = fixture();
+    const oldLink = 'https://www.tiktok.com/@legacy/video/123';
+    f.videos.length = 0;
+    f.window.location.href = oldLink + '?share=1';
+    f.document.querySelector = selector => ({
+        'meta[property="og:title"]': { content: 'Legacy video title' },
+        'meta[property="og:image"]': { content: 'https://images.tiktokcdn-eu.com/cover.jpg' }
+    })[selector];
+    const details = f.window.tokmacWatchLaterDetails(oldLink);
+    assert.equal(details.title, 'Legacy video title');
+    assert.equal(details.thumbnailUrl, 'https://images.tiktokcdn-eu.com/cover.jpg');
+    assert.equal(f.window.tokmacWatchLaterDetails('https://www.tiktok.com/@other/video/456'), null);
+    assert.equal(f.window.tokmacWatchLaterDetails(), null);
+});
+
+test('watch-later details keep a link when title and cover are unavailable', () => {
+    const f = fixture();
+    f.window.location.href = 'https://www.tiktok.com/foryou';
+    const scope = {
+        querySelectorAll: () => [{ textContent: 'Other video' }, { textContent: 'Another video' }]
+    };
+    f.video.closest = selector => selector === 'a[href]' ? { href: '/@active/video/123' } : scope;
+    f.video.poster = 'http://images.tiktokcdn.com/poster.jpg';
+    const details = f.window.tokmacWatchLaterDetails();
+    assert.equal(details.url, 'https://www.tiktok.com/@active/video/123');
+    assert.equal(details.title, null);
+    assert.equal(details.thumbnailUrl, null);
+});
+
 test('cyclic metadata terminates and cannot select an unrelated URL', () => {
     const metadata = { id: '999', video: { downloadAddr: 'https://cdn.example/other.mp4' } };
     metadata.self = metadata;
