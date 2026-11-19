@@ -34,7 +34,7 @@ final class PlaybackReceiver: NSObject, PlaybackActions {
 
 @main struct AppKitRegression {
     static func main() {
-        NSApplication.shared.setActivationPolicy(.prohibited)
+        NSApplication.shared.setActivationPolicy(.accessory)
         let store = PopupWindowStore()
         weak var releasedWindow: NSWindow?
         for _ in 0..<20 {
@@ -87,16 +87,23 @@ final class PlaybackReceiver: NSObject, PlaybackActions {
             precondition(visible.contains(controller.window!.frame), "Switching modes at a screen edge must keep the window visible")
         }
         let parent = controller.window!.contentView!
-        let oldHUD = DownloadHUDView()
+        // Exercise the animations in a visible window and wait for their actual completion.
+        controller.window?.orderFrontRegardless()
+        let hudFrame = NSRect(x: 10, y: 10, width: 400, height: 70)
+        let oldHUD = DownloadHUDView(frame: hudFrame)
         parent.addSubview(oldHUD)
         precondition(oldHUD.canReuse)
         oldHUD.dismissAnimated()
         precondition(!oldHUD.canReuse, "An in-flight dismissal must prevent reuse immediately")
-        let newHUD = DownloadHUDView()
+        let newHUD = DownloadHUDView(frame: hudFrame)
         parent.addSubview(newHUD)
         newHUD.startDownload(filename: "new download.mp4")
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.4))
-        precondition(oldHUD.superview == nil && newHUD.canReuse, "Old animations must not remove a new download HUD")
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        while oldHUD.superview != nil && ProcessInfo.processInfo.systemUptime < deadline {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        }
+        precondition(oldHUD.superview == nil, "Dismissed HUD must be detached after the animation")
+        precondition(newHUD.superview === parent && newHUD.canReuse, "Old animations must not remove a new download HUD")
         controller.window?.close()
         print("AppKit popup lifecycle, system shortcuts, and toolbar regression checks passed.")
     }
