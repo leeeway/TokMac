@@ -65,6 +65,50 @@ test('uses the actual video source before hydration metadata', () => {
     assert.equal(f.window.tokmacGetVideoDownloadInfo().url, 'https://cdn.example/playing.mp4');
 });
 
+test('current-video links use the active card and remove tracking parameters', () => {
+    const f = fixture();
+    f.window.location.href = 'https://www.tiktok.com/foryou';
+    const other = { ...f.video, closest: () => ({ href: '/@other/video/999' }), paused: true };
+    f.videos.unshift(other);
+    f.video.paused = false;
+    f.video.closest = selector => selector.includes('recommend-list-item-container') ? {
+        querySelectorAll: () => [
+            { href: '/@current/video/123?is_copy_url=1#more' },
+            { href: 'https://m.tiktok.com/@current/video/123/' },
+            { href: 'https://tiktok.com.evil.example/@other/video/999' }
+        ]
+    } : null;
+    assert.equal(f.window.tokmacCurrentVideoLink(), 'https://www.tiktok.com/@current/video/123');
+});
+
+test('current-video links reject ambiguous cards and unrelated detail pages', () => {
+    const f = fixture();
+    f.window.location.href = 'https://www.tiktok.com/@previous/video/789';
+    const links = [{ href: '/@first/video/123' }, { href: '/@second/video/456' }];
+    f.video.closest = selector => selector.includes('recommend-list-item-container') ? { querySelectorAll: () => links } : null;
+    assert.equal(f.window.tokmacCurrentVideoLink(), null);
+    f.window.location.href = 'https://www.tiktok.com/@second/video/456?ref=feed';
+    assert.equal(f.window.tokmacCurrentVideoLink(), 'https://www.tiktok.com/@second/video/456');
+    links.length = 0;
+    f.videos.push({ ...f.video });
+    assert.equal(f.window.tokmacCurrentVideoLink(), null);
+});
+
+test('current-video links accept a dedicated player but reject untrusted permalinks', () => {
+    const f = fixture();
+    f.video.closest = () => null;
+    for (const url of [
+        'http://www.tiktok.com/@user/video/123', 'https://www.tiktok.com:8443/@user/video/123',
+        'https://user@www.tiktok.com/@user/video/123', 'https://tiktok.com.evil.example/@user/video/123',
+        'https://www.tiktok.com/@user/video/123/related', 'https://www.tiktok.com/@user/photo/123'
+    ]) {
+        f.window.location.href = url;
+        assert.equal(f.window.tokmacCurrentVideoLink(), null);
+    }
+    f.window.location.href = 'https://www.tiktok.com/@user/video/123?from=profile';
+    assert.equal(f.window.tokmacCurrentVideoLink(), 'https://www.tiktok.com/@user/video/123');
+});
+
 test('cyclic metadata terminates and cannot select an unrelated URL', () => {
     const metadata = { id: '999', video: { downloadAddr: 'https://cdn.example/other.mp4' } };
     metadata.self = metadata;

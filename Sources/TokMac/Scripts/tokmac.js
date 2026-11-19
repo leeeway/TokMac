@@ -85,6 +85,34 @@ div[class*="DivTopNavDownloadLink"] {
         return video.closest('[data-e2e="recommend-list-item-container"], article, [data-e2e="feed-item"]');
     }
 
+    function videoPermalink(value) {
+        if (!value) return null;
+        try {
+            const url = new URL(value, window.location.href);
+            if (url.protocol !== 'https:' || url.port || url.username || url.password ||
+                (url.hostname !== 'tiktok.com' && !url.hostname.endsWith('.tiktok.com'))) return null;
+            const path = url.pathname.match(/^\/@([A-Za-z0-9._]{1,64})\/video\/([0-9]{1,32})\/?$/);
+            return path ? `https://www.tiktok.com/@${path[1]}/video/${path[2]}` : null;
+        } catch (_) { return null; }
+    }
+
+    window.tokmacCurrentVideoLink = function() {
+        const video = getActiveVideo();
+        if (!video) return null;
+        const directLink = videoPermalink(video.closest('a[href]')?.href);
+        if (directLink) return directLink;
+
+        const card = videoCard(video);
+        const links = new Set(Array.from(card?.querySelectorAll('a[href]') ?? [], link => videoPermalink(link.href))
+            .filter(Boolean));
+        if (links.size === 1) return links.values().next().value;
+        const detailLink = videoPermalink(window.location.href);
+        if (detailLink && (links.has(detailLink) ||
+            (links.size === 0 && (video.closest('[role="dialog"], [data-e2e="browse-video"]') ||
+                document.querySelectorAll('video').length === 1)))) return detailLink;
+        return null;
+    };
+
     function navigateVideo(direction) {
         const video = getActiveVideo();
         if (!video) return;

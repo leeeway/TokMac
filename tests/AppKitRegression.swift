@@ -1,4 +1,5 @@
 import Cocoa
+import TokMacCore
 
 // The real window controller is exercised with a local empty content view, so these
 // tests don't navigate to TikTok, touch cookies, or require a network connection.
@@ -17,6 +18,10 @@ final class WebViewController: NSViewController {
     func togglePlay() {}
     func toggleMute() {}
     func toggleComments() {}
+    func copyCurrentVideoLink() {}
+    func currentVideo(_ completion: @escaping (SavedVideo?) -> Void) { completion(nil) }
+    func openSavedVideo(_ video: SavedVideo) {}
+    func showNotification(title: String, body: String) {}
 }
 
 final class PlaybackReceiver: NSObject, PlaybackActions {
@@ -59,6 +64,7 @@ final class PlaybackReceiver: NSObject, PlaybackActions {
         let copy = editing.items.first { $0.keyEquivalent == "c" }!
         precondition(copy.action == #selector(NSText.copy(_:)) && copy.target == nil && copy.keyEquivalentModifierMask == .command)
         let controller = MainWindowController()
+        precondition(controller.window?.windowController === controller, "Web context actions must reach the main controller")
         let toolbar = controller.window!.toolbar!
         let pin = toolbar.items.first { $0.itemIdentifier.rawValue == "TokMacPinItem" }!
         let mode = toolbar.items.first { $0.itemIdentifier.rawValue == "TokMacModeItem" }!

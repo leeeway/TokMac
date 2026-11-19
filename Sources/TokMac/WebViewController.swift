@@ -194,11 +194,40 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     }
 
     func copyCurrentVideoLink() {
+        currentVideo { [weak self] video in
+            guard let self, let video else { return }
+            NSPasteboard.general.clearContents()
+            let copied = NSPasteboard.general.setString(video.url.absoluteString, forType: .string)
+            self.showNotification(title: copied ? "已复制视频链接" : "无法复制视频链接", body: video.title)
+        }
+    }
+
+    func copyPageLink() {
         if let urlString = webView.url?.absoluteString {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(urlString, forType: .string)
             showNotification(title: "链接已复制", body: urlString)
         }
+    }
+
+    func currentVideo(_ completion: @escaping (SavedVideo?) -> Void) {
+        guard let page = webView.url, DownloadFile.isTrustedPage(page) else {
+            showNotification(title: "没有可用的当前视频", body: "请先打开 TikTok 视频")
+            completion(nil)
+            return
+        }
+        webView.evaluateJavaScript("window.tokmacCurrentVideoLink?.() ?? null") { [weak self] result, _ in
+            guard let self else { return }
+            let video = self.webView.url == page ? (result as? String).flatMap(SavedVideo.init) : nil
+            if video == nil {
+                self.showNotification(title: "找不到当前视频链接", body: "试试打开视频详情页")
+            }
+            completion(video)
+        }
+    }
+
+    func openSavedVideo(_ video: SavedVideo) {
+        webView.load(URLRequest(url: video.url))
     }
 
     func reloadPage() {
@@ -346,7 +375,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         }
     }
 
-    private func showNotification(title: String, body: String) {
+    func showNotification(title: String, body: String) {
         // A toast must not replace the active download's progress/cancel controls.
         guard downloadID == nil else { return }
         showDownloadHUD().showToast(title: title, subtitle: body)

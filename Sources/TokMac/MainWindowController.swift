@@ -1,7 +1,10 @@
 import Cocoa
+import TokMacCore
 
 final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private let webViewController = WebViewController()
+    private let watchLater = WatchLaterStore(file: URL.applicationSupportDirectory
+        .appendingPathComponent("TokMac", isDirectory: true).appendingPathComponent("watch-later.json"))
     private(set) var isAlwaysOnTop: Bool = false
 
     private let toolbarID = NSToolbar.Identifier("TokMacMainToolbar")
@@ -125,6 +128,68 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
     @objc func downloadCurrentVideo() {
         webViewController.downloadCurrentVideo()
+    }
+
+    @objc func copyCurrentVideoLink() {
+        webViewController.copyCurrentVideoLink()
+    }
+
+    @objc func saveCurrentVideo() {
+        webViewController.currentVideo { [weak self] video in
+            guard let self, let video else { return }
+            do {
+                let added = try self.watchLater.add(video)
+                self.webViewController.showNotification(title: added ? "已加入稍后看" : "已在稍后看中", body: video.title)
+            } catch {
+                self.showWatchLaterError(error)
+            }
+        }
+    }
+
+    @objc func showWatchLater() {
+        guard let window, window.attachedSheet == nil else { return }
+        do {
+            let videos = try watchLater.videos()
+            let alert = NSAlert()
+            alert.messageText = "稍后看"
+            guard !videos.isEmpty else {
+                alert.informativeText = "还没有收藏的视频。播放视频时可以从「稍后看」菜单加入收藏。"
+                alert.addButton(withTitle: "关闭")
+                alert.beginSheetModal(for: window)
+                return
+            }
+
+            let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 350, height: 30))
+            picker.setAccessibilityLabel("收藏的视频")
+            picker.addItems(withTitles: videos.map(\.title))
+            alert.accessoryView = picker
+            alert.addButton(withTitle: "打开")
+            alert.addButton(withTitle: "关闭").keyEquivalent = "\u{1b}"
+            alert.addButton(withTitle: "移除收藏")
+            alert.beginSheetModal(for: window) { [weak self] response in
+                guard let self, videos.indices.contains(picker.indexOfSelectedItem) else { return }
+                let video = videos[picker.indexOfSelectedItem]
+                if response == .alertFirstButtonReturn {
+                    self.webViewController.openSavedVideo(video)
+                } else if response == .alertThirdButtonReturn {
+                    do {
+                        try self.watchLater.remove(video)
+                        DispatchQueue.main.async { [weak self] in self?.showWatchLater() }
+                    } catch {
+                        self.showWatchLaterError(error)
+                    }
+                }
+            }
+        } catch {
+            showWatchLaterError(error)
+        }
+    }
+
+    private func showWatchLaterError(_ error: Error) {
+        guard let window else { return }
+        let alert = NSAlert(error: error)
+        alert.messageText = "无法更新稍后看"
+        alert.beginSheetModal(for: window)
     }
 
     @objc func toggleAlwaysOnTop() {

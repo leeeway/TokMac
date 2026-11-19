@@ -92,7 +92,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PlaybackActions {
         viewMenuItem.submenu = viewMenu
         mainMenu.addItem(viewMenuItem)
 
-        // 4. Playback Menu
+        let watchLaterItem = NSMenuItem()
+        let watchLater = NSMenu(title: "稍后看")
+        let videoActions: [(String, Selector, String, NSEvent.ModifierFlags)] = [
+            ("加入稍后看", #selector(saveCurrentVideo), "d", [.command]),
+            ("打开稍后看…", #selector(showWatchLater), "d", [.command, .shift]),
+            ("复制当前视频链接", #selector(copyCurrentVideoLink), "l", [.command, .shift])
+        ]
+        for (title, action, key, modifiers) in videoActions {
+            let item = watchLater.addItem(withTitle: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+            item.target = self
+        }
+        watchLaterItem.submenu = watchLater
+        mainMenu.addItem(watchLaterItem)
+
+        // Playback Menu
         let playMenuItem = NSMenuItem()
         playMenuItem.submenu = ApplicationMenus.playback(target: self)
         mainMenu.addItem(playMenuItem)
@@ -123,6 +138,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, PlaybackActions {
     @objc private func downloadCurrentVideo() {
         mainWindowController?.downloadCurrentVideo()
     }
+
+    @objc private func saveCurrentVideo() { mainWindowController?.saveCurrentVideo() }
+    @objc private func showWatchLater() { mainWindowController?.showWatchLater() }
+    @objc private func copyCurrentVideoLink() { mainWindowController?.copyCurrentVideoLink() }
 
     @objc private func togglePin() {
         mainWindowController?.toggleAlwaysOnTop()

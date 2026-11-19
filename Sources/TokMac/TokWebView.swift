@@ -19,7 +19,13 @@ final class TokWebView: WKWebView {
         copyLinkItem.target = self
         menu.insertItem(copyLinkItem, at: 2)
 
-        menu.insertItem(NSMenuItem.separator(), at: 3)
+        let copyVideoItem = NSMenuItem(title: "复制当前视频链接", action: #selector(handleCopyVideoLink), keyEquivalent: "")
+        copyVideoItem.target = self
+        menu.insertItem(copyVideoItem, at: 3)
+        let saveVideoItem = NSMenuItem(title: "加入稍后看", action: #selector(handleSaveVideo), keyEquivalent: "")
+        saveVideoItem.target = self
+        menu.insertItem(saveVideoItem, at: 4)
+        menu.insertItem(NSMenuItem.separator(), at: 5)
     }
 
     @objc private func handleDownload() {
@@ -31,6 +37,14 @@ final class TokWebView: WKWebView {
     }
 
     @objc private func handleCopyLink() {
+        controller?.copyPageLink()
+    }
+
+    @objc private func handleCopyVideoLink() {
         controller?.copyCurrentVideoLink()
+    }
+
+    @objc private func handleSaveVideo() {
+        (window?.windowController as? MainWindowController)?.saveCurrentVideo()
     }
 }

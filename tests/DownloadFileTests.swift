@@ -13,7 +13,8 @@ struct DownloadFileTests {
         try tests.testMissingOrEmptyDownloadPreservesOriginal()
         try tests.testFailedReplacementPreservesDestinationAndDownloadedBytes()
         try tests.testFormatCorrectionDoesNotOverwriteUnselectedFiles()
-        print("9 Swift download validation, file format and atomic-save checks passed.")
+        try tests.testWatchLaterPersistenceAndValidation()
+        print("Swift download and watch-later checks passed.")
     }
 
     private func fixture(_ name: String) throws -> Data {
@@ -131,6 +132,33 @@ struct DownloadFileTests {
             try webM.write(to: temporary)
             checkEqual(try DownloadFile.commit(temporary, to: target).pathExtension, "webm")
             checkEqual(try Data(contentsOf: target), original)
+        }
+    }
+
+    func testWatchLaterPersistenceAndValidation() throws {
+        for value in ["https://tiktok.com.evil.example/@user/video/123", "http://tiktok.com/@user/video/123",
+                      "https://name@tiktok.com/@user/video/123", "https://tiktok.com:123/@user/video/123",
+                      "https://tiktok.com/@user/video/123/extra"] {
+            checkTrue(SavedVideo(value) == nil)
+        }
+        try withDirectory { directory in
+            let file = directory.appendingPathComponent("library/watch-later.json")
+            let store = WatchLaterStore(file: file)
+            let first = SavedVideo("https://m.tiktok.com/@first/video/123/?ref=feed#more")!
+            let second = SavedVideo("https://www.tiktok.com/@second/video/456")!
+            let renamed = SavedVideo("https://www.tiktok.com/@renamed/video/123")!
+            checkEqual(first.url.absoluteString, "https://www.tiktok.com/@first/video/123")
+            checkEqual(try store.videos(), [])
+            checkEqual(try store.add(first), true)
+            checkEqual(try store.add(second), true)
+            checkEqual(try store.add(renamed), false)
+            checkEqual(try WatchLaterStore(file: file).videos(), [second, renamed])
+            try store.remove(first)
+            checkEqual(try WatchLaterStore(file: file).videos(), [second])
+            let corrupt = Data("[null]".utf8)
+            try corrupt.write(to: file)
+            checkThrows(try store.add(first))
+            checkEqual(try Data(contentsOf: file), corrupt)
         }
     }
 

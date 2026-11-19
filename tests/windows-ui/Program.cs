@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Web.WebView2.Wpf;
@@ -38,7 +39,33 @@ internal static class Program
             if (host.Children[0] is not WebView2CompositionControl || host.Children[0] == oldBrowser ||
                 host.Children.Contains(oldBrowser) || host.Children[^1] != overlay)
                 throw new Exception("Browser recovery must attach a new control below the recovery overlay");
+
+            CheckWatchLaterDialog();
         }
         finally { window.Close(); app.Shutdown(); }
+    }
+
+    private static void CheckWatchLaterDialog()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        var store = new WatchLaterStore(Path.Combine(directory, "watch-later.json"));
+        var video = SavedVideo.Parse("https://www.tiktok.com/@current/video/123")!;
+        store.Add(video);
+        var dialog = new WatchLaterWindow(store);
+        try
+        {
+            var remove = (Button)dialog.FindName("removeButton");
+            var open = (Button)dialog.FindName("openButton");
+            if (!remove.IsEnabled || !open.IsEnabled || dialog.SelectedVideo?.Url != video.Url)
+                throw new Exception("A saved video must be selected and available to open or remove");
+            remove.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            if (remove.IsEnabled || open.IsEnabled || dialog.SelectedVideo != null || store.Videos().Count != 0)
+                throw new Exception("Removing the last video must persist and leave an empty list");
+        }
+        finally
+        {
+            dialog.Close();
+            Directory.Delete(directory, recursive: true);
+        }
     }
 }

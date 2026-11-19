@@ -7,6 +7,35 @@ static void Check(bool condition, string message)
     if (!condition) throw new Exception(message);
 }
 
+static void TestWatchLater(string directory)
+{
+    foreach (var value in new[] {
+        "https://tiktok.com.evil.example/@user/video/123", "http://tiktok.com/@user/video/123",
+        "https://name@tiktok.com/@user/video/123", "https://tiktok.com:123/@user/video/123",
+        "https://tiktok.com/@user/video/123/extra"
+    }) Check(SavedVideo.Parse(value) == null, "Invalid video permalink must fail");
+
+    var file = Path.Combine(directory, "library", "watch-later.json");
+    var store = new WatchLaterStore(file);
+    var first = SavedVideo.Parse("https://m.tiktok.com/@first/video/123/?ref=feed#more")!;
+    var second = SavedVideo.Parse("https://www.tiktok.com/@second/video/456")!;
+    var renamed = SavedVideo.Parse("https://www.tiktok.com/@renamed/video/123")!;
+    Check(first.Url.AbsoluteUri == "https://www.tiktok.com/@first/video/123", "Permalinks must be canonical");
+    Check(store.Videos().Count == 0, "Missing library must be empty");
+    Check(store.Add(first) && store.Add(second) && !store.Add(renamed), "Deduplicate by video ID");
+    var persisted = new WatchLaterStore(file).Videos();
+    Check(persisted.Count == 2 && persisted[0].Url == second.Url && persisted[1].Url == renamed.Url,
+        "Newest videos go first and a renamed author updates an existing video");
+    store.Remove(first);
+    var remaining = new WatchLaterStore(file).Videos();
+    Check(remaining.Count == 1 && remaining[0].Url == second.Url, "Removal must persist");
+    const string corrupt = "[null]";
+    File.WriteAllText(file, corrupt);
+    try { store.Add(first); throw new Exception("Corrupted library must fail"); }
+    catch (InvalidDataException) { }
+    Check(File.ReadAllText(file) == corrupt, "Corrupted library must be preserved");
+}
+
 var page = new Uri("https://www.tiktok.com/foryou");
 Check(DownloadFile.IsTrustedPage(page), "TikTok must be trusted");
 Check(!DownloadFile.IsTrustedPage(new Uri("https://tiktok.com.evil.example")), "Suffix spoof must be rejected");
@@ -23,6 +52,7 @@ var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
 Directory.CreateDirectory(directory);
 try
 {
+    TestWatchLater(directory);
     var target = Path.Combine(directory, "O'Connor.mp4");
     File.WriteAllText(target, "original");
     var temporary = DownloadFile.TemporaryPath(target);

@@ -6,6 +6,8 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Automation.Peers;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Shell;
@@ -39,6 +41,9 @@ namespace TokMac
         private bool closing;
         private bool recreateBrowser;
         private DateTimeOffset lastBrowserRecovery;
+        private readonly WatchLaterStore watchLater = new(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TokMac", "watch-later.json"));
+        private readonly DispatcherTimer videoActionTimer = new() { Interval = TimeSpan.FromSeconds(3) };
 
         private sealed class BlobRequest
         {
@@ -58,12 +63,18 @@ namespace TokMac
             InitializeComponent();
             Loaded += MainWindow_Loaded;
             PreviewKeyDown += MainWindow_KeyDown;
+            videoActionTimer.Tick += (_, _) =>
+            {
+                videoActionTimer.Stop();
+                videoActionStatus.Visibility = Visibility.Collapsed;
+            };
             Closed += (_, _) =>
             {
                 closing = true;
                 browser = null;
                 downloadCts?.Cancel();
                 autoDismissTimer?.Stop();
+                videoActionTimer.Stop();
                 webView.Dispose();
             };
         }
@@ -117,9 +128,15 @@ namespace TokMac
                 core.DownloadStarting += CoreWebView2_DownloadStarting;
                 core.ContextMenuRequested += (_, args) =>
                 {
-                    var item = environment.CreateContextMenuItem("下载当前视频 (Ctrl+S)", null, CoreWebView2ContextMenuItemKind.Command);
-                    item.CustomItemSelected += async (_, _) => await TriggerVideoDownloadAsync();
-                    args.MenuItems.Insert(0, item);
+                    var download = environment.CreateContextMenuItem("下载当前视频 (Ctrl+S)", null, CoreWebView2ContextMenuItemKind.Command);
+                    download.CustomItemSelected += async (_, _) => await TriggerVideoDownloadAsync();
+                    var save = environment.CreateContextMenuItem("加入稍后看", null, CoreWebView2ContextMenuItemKind.Command);
+                    save.CustomItemSelected += async (_, _) => await SaveCurrentVideoAsync();
+                    var copy = environment.CreateContextMenuItem("复制当前视频链接", null, CoreWebView2ContextMenuItemKind.Command);
+                    copy.CustomItemSelected += async (_, _) => await CopyCurrentVideoLinkAsync();
+                    args.MenuItems.Insert(0, copy);
+                    args.MenuItems.Insert(0, save);
+                    args.MenuItems.Insert(0, download);
                 };
                 core.SourceChanged += (_, _) =>
                 {
@@ -253,6 +270,92 @@ namespace TokMac
         }
 
         // MARK: - Actions
+        private void WatchLaterMenu_Click(object sender, RoutedEventArgs e)
+        {
+            var button = (Button)sender;
+            button.ContextMenu.PlacementTarget = button;
+            button.ContextMenu.IsOpen = true;
+        }
+
+        private async void SaveVideo_Click(object sender, RoutedEventArgs e) => await SaveCurrentVideoAsync();
+        private async void CopyVideoLink_Click(object sender, RoutedEventArgs e) => await CopyCurrentVideoLinkAsync();
+        private async void ShowWatchLater_Click(object sender, RoutedEventArgs e) => await ShowWatchLaterAsync();
+
+        private async Task<SavedVideo?> ResolveCurrentVideoAsync()
+        {
+            var core = browser;
+            var page = webView.Source;
+            if (core != null && DownloadFile.IsTrustedPage(page) && browserStatus.Visibility != Visibility.Visible)
+            {
+                try
+                {
+                    string result = await core.ExecuteScriptAsync("window.tokmacCurrentVideoLink?.() ?? null");
+                    if (core == browser && Equals(webView.Source, page) &&
+                        SavedVideo.Parse(JsonSerializer.Deserialize<string>(result)) is { } video)
+                        return video;
+                }
+                catch (Exception error) when (error is COMException or InvalidOperationException or JsonException)
+                {
+                    Debug.WriteLine(error);
+                }
+            }
+            ShowVideoActionStatus("当前视频没有可用链接");
+            return null;
+        }
+
+        private async Task SaveCurrentVideoAsync()
+        {
+            if (await ResolveCurrentVideoAsync() is not { } video) return;
+            try { ShowVideoActionStatus(watchLater.Add(video) ? "已加入稍后看" : "视频已在稍后看中"); }
+            catch (Exception error)
+            {
+                Debug.WriteLine(error);
+                ShowVideoActionStatus("无法保存到稍后看");
+            }
+        }
+
+        private async Task CopyCurrentVideoLinkAsync()
+        {
+            if (await ResolveCurrentVideoAsync() is not { } video) return;
+            try
+            {
+                Clipboard.SetText(video.Url.AbsoluteUri);
+                ShowVideoActionStatus("已复制当前视频链接");
+            }
+            catch (ExternalException error)
+            {
+                Debug.WriteLine(error);
+                ShowVideoActionStatus("无法写入剪贴板");
+            }
+        }
+
+        private async Task ShowWatchLaterAsync()
+        {
+            var dialog = new WatchLaterWindow(watchLater) { Owner = this };
+            if (dialog.ShowDialog() != true || dialog.SelectedVideo is not { } video) return;
+            lastTrustedPage = video.Url;
+            try
+            {
+                if (browser is { } core) core.Navigate(video.Url.AbsoluteUri);
+                else await RecoverBrowserAsync();
+            }
+            catch (Exception error) when (error is COMException or InvalidOperationException)
+            {
+                Debug.WriteLine(error);
+                ShowBrowserError("视频无法打开，请重新加载。");
+            }
+        }
+
+        private void ShowVideoActionStatus(string message)
+        {
+            if (closing) return;
+            videoActionText.Text = message;
+            videoActionStatus.Visibility = Visibility.Visible;
+            UIElementAutomationPeer.CreatePeerForElement(videoActionText)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+            videoActionTimer.Stop();
+            videoActionTimer.Start();
+        }
+
         private async void BtnDownload_Click(object sender, RoutedEventArgs e)
         {
             await TriggerVideoDownloadAsync();
@@ -595,6 +698,20 @@ namespace TokMac
 
         private async void MainWindow_KeyDown(object sender, KeyEventArgs e)
         {
+            if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
+            {
+                if (e.Key == Key.D)
+                {
+                    e.Handled = true;
+                    await ShowWatchLaterAsync();
+                }
+                else if (e.Key == Key.L)
+                {
+                    e.Handled = true;
+                    await CopyCurrentVideoLinkAsync();
+                }
+                return;
+            }
             if (Keyboard.Modifiers == ModifierKeys.Control)
             {
                 if (e.Key == Key.S)
@@ -621,6 +738,11 @@ namespace TokMac
                 {
                     e.Handled = true;
                     BtnReload_Click(sender, e);
+                }
+                else if (e.Key == Key.D)
+                {
+                    e.Handled = true;
+                    await SaveCurrentVideoAsync();
                 }
             }
             else if (e.Key == Key.F5)

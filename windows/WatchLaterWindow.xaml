@@ -1,0 +1,22 @@
+<Window x:Class="TokMac.WatchLaterWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="稍后看" Height="320" Width="380" MinHeight="220" MinWidth="320"
+        Background="{StaticResource BarDark}" WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <ListBox x:Name="videos" DisplayMemberPath="Title" SelectionChanged="OnSelectionChanged"
+                 AutomationProperties.Name="已收藏的视频" />
+        <TextBlock x:Name="status" Grid.Row="1" Foreground="{StaticResource TextWhite}" TextWrapping="Wrap"
+                   Margin="0,8,0,0" Visibility="Collapsed" />
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button x:Name="removeButton" Content="移除" Padding="12,4" Margin="0,0,8,0" Click="Remove_Click" IsEnabled="False" />
+            <Button Content="关闭" Padding="12,4" Margin="0,0,8,0" IsCancel="True" />
+            <Button x:Name="openButton" Content="打开视频" Padding="12,4" Click="Open_Click" IsDefault="True" IsEnabled="False" />
+        </StackPanel>
+    </Grid>
+</Window>

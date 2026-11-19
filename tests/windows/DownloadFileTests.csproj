@@ -9,5 +9,6 @@
     <Compile Include="../../windows/VideoContainer.cs" Link="VideoContainer.cs" />
     <None Include="../fixtures/tiny.*" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="../../windows/DownloadHttpClient.cs" Link="DownloadHttpClient.cs" />
+    <Compile Include="../../windows/WatchLaterStore.cs" Link="WatchLaterStore.cs" />
   </ItemGroup>
 </Project>

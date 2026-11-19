@@ -25,24 +25,34 @@
         <Border x:Name="toolbarBar" Grid.Row="0" Background="#1B1B1E" BorderBrush="#2A2A2E" BorderThickness="0,0,0,1" Padding="12,0">
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
                 <!-- App Branding -->
-                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                <DockPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0">
                     <Image Source="Resources/app.png" Width="18" Height="18" Margin="0,0,8,0" RenderOptions.BitmapScalingMode="HighQuality" />
-                    <TextBlock Text="TokMac" FontWeight="SemiBold" FontSize="13" Foreground="#FFFFFF" VerticalAlignment="Center" />
-                </StackPanel>
+                    <TextBlock Text="TokMac" FontWeight="SemiBold" FontSize="13" Foreground="#FFFFFF"
+                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                </DockPanel>
 
                 <!-- Action Buttons on the Right -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <!-- Pin on top -->
                     <Button x:Name="btnPin" Content="📌 置顶" Style="{StaticResource ToolbarButtonStyle}" Margin="0,0,6,0" Click="BtnPin_Click" ToolTip="窗口置顶 (Ctrl+T)" />
 
                     <!-- Layout Switch -->
                     <Button x:Name="btnLayout" Content="📱 竖屏小窗" Style="{StaticResource ToolbarButtonStyle}" Margin="0,0,6,0" Click="BtnLayout_Click" ToolTip="切换竖屏/桌面模式 (Ctrl+1 / Ctrl+2)" />
+
+                    <Button Content="稍后看" Style="{StaticResource ToolbarButtonStyle}" Margin="0,0,6,0" Click="WatchLaterMenu_Click">
+                        <Button.ContextMenu>
+                            <ContextMenu Placement="Bottom">
+                                <MenuItem Header="加入稍后看" InputGestureText="Ctrl+D" Click="SaveVideo_Click" />
+                                <MenuItem Header="打开稍后看…" InputGestureText="Ctrl+Shift+D" Click="ShowWatchLater_Click" />
+                                <MenuItem Header="复制当前视频链接" InputGestureText="Ctrl+Shift+L" Click="CopyVideoLink_Click" />
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
 
                     <!-- Download Video -->
                     <Button x:Name="btnDownload" Content="⬇️ 下载视频" Style="{StaticResource AccentButtonStyle}" Margin="0,0,6,0" Click="BtnDownload_Click" ToolTip="下载当前播放的视频 (Ctrl+S)" />
@@ -93,6 +103,12 @@
                                 Width="22" Height="22" Padding="0" Click="HudCloseBtn_Click" ToolTip="关闭" />
                     </StackPanel>
                 </Grid>
+            </Border>
+            <Border x:Name="videoActionStatus" Visibility="Collapsed" Background="#F0222226"
+                    HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="16,0,16,20"
+                    Padding="12,8" CornerRadius="8" IsHitTestVisible="False">
+                <TextBlock x:Name="videoActionText" Foreground="White" TextWrapping="Wrap"
+                           AutomationProperties.LiveSetting="Polite" />
             </Border>
             <Border x:Name="browserStatus" Visibility="Collapsed" Background="#F0222226"
                     HorizontalAlignment="Center" VerticalAlignment="Center" Padding="20" CornerRadius="8" MaxWidth="400">
